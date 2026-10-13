@@ -12,6 +12,9 @@ secrets.json
 *.test
 *.out
 
+# 前端依赖（构建产物在 internal/webui/dist，那个要入库）
+web/node_modules/
+
 # 编辑器 / 系统
 .DS_Store
 .idea/

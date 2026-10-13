@@ -1,0 +1,37 @@
+/* 自托管字体：项目承诺不向任何第三方回传数据，所以不能用字体 CDN。
+   只嵌入 latin 字形（127 KB → 现在 79 KB）。
+   中文不在这些字体里，走系统回退，见 styles/rawblock.css 的字体栈；
+   嵌入 CJK 字形会有 5~15 MB，不值得。 */
+
+@font-face {
+  font-family: "Archivo Black";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/archivo-black-400.woff2") format("woff2");
+}
+
+/* Work Sans 是可变形字体，400 与 700 是同一个文件，只声明一次。 */
+@font-face {
+  font-family: "Work Sans";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/work-sans-400.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Space Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/space-mono-400.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Space Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/fonts/space-mono-700.woff2") format("woff2");
+}
