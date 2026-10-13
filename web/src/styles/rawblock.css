@@ -210,15 +210,38 @@ pre {
   flex-direction: column;
 }
 
+/* 顶栏是本界面里**唯一**能用玻璃的地方：只有它背后有东西在动
+   （表格和图表从下面滚过去）。别处用玻璃没有意义——背后是平的白底，
+   模糊一片白还是白，只是白白付出重绘代价。见 design.md 第八节。 */
 .topbar {
   border-bottom: 5px solid var(--rule);
   display: flex;
   align-items: stretch;
   flex-wrap: wrap;
-  background: var(--paper);
   position: sticky;
   top: 0;
   z-index: 10;
+
+  /* 第一行是不支持 color-mix 时的兜底：先用实色，能算再换成半透明。 */
+  background: var(--paper);
+  background: color-mix(in srgb, var(--paper) 82%, transparent);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+/* 玻璃面板里的导航按钮自己不能是不透明的，否则会挡住背后那层模糊。 */
+.nav button {
+  background: transparent;
+}
+
+/* 有人把系统的「减少透明度」打开了，就别硬上——直接给实色。
+   Apple 的可访问性清单里有这一条（design.md 第十一节）。 */
+@media (prefers-reduced-transparency: reduce) {
+  .topbar {
+    background: var(--paper);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 
 .brand {
@@ -253,7 +276,6 @@ pre {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.8px;
-  background: var(--paper);
   color: var(--ink);
   border: 0;
   border-right: 3px solid var(--rule);
@@ -262,7 +284,9 @@ pre {
 }
 
 .nav button:hover {
+  /* 半透明悬停：实色会在玻璃面板上贴一块不透明的补丁。 */
   background: var(--hover);
+  background: color-mix(in srgb, var(--ink) 9%, transparent);
 }
 
 .nav button[aria-current="page"] {
