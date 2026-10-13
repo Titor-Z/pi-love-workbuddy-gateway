@@ -100,6 +100,8 @@ func runServe(args []string) error {
 	logger.Printf("    GET  /health")
 	logger.Printf("    GET  /v1/models")
 	logger.Printf("    POST /v1/chat/completions")
+	logger.Printf("提示：本软件为第三方工具，与腾讯 / WorkBuddy 无官方关联，" +
+		"使用风险自负；完整条款见 README 的《免责声明》。")
 	if cfg.APIKey != "" {
 		logger.Printf("已启用本地访问密钥校验")
 	}
