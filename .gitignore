@@ -1,0 +1,21 @@
+# 项目协作契约，不上传到 GitHub
+AGENTS.md
+
+# 本地登录态 / 凭据，绝不入库
+*.info
+secrets.json
+.env
+
+# Go 构建产物
+/bin/
+/dist/
+*.test
+*.out
+
+# 编辑器 / 系统
+.DS_Store
+.idea/
+.vscode/
+
+# 编译产物
+/pi-love-workbuddy-gateway

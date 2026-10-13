@@ -1,0 +1,57 @@
+# 发布说明
+
+> **这个文件只写「即将发布的那一版」。**
+>
+> GitHub Release 页面的正文直接取这个文件的内容。发布完成后，把这里换成下一版的说明；
+> 历史版本不用在这里累积——GitHub Releases 页面本身就是历史，
+> 项目内部的完整版本记录在 `AGENTS.md`。
+
+---
+
+## v0.1.0
+
+第一个可用版本。
+
+### 它能做什么
+
+- 在 `127.0.0.1:8788` 开一个 OpenAI 兼容接口，把 WorkBuddy（腾讯 CodeBuddy 国内版）的
+  订阅额度接给 pi 使用。
+- 只要这台机器上的 WorkBuddy 桌面端**登录过一次**，之后就不用再开它。
+- 令牌过期时自动续期，并把新令牌加密写回原文件，WorkBuddy 桌面端下次打开仍是登录状态。
+- 模型清单直接读后端的实时目录，比桌面端本地的 `product.json` 新，因此能看到
+  `hy4-preview`、`step-5-preview`、`space-bunny`、`deepseek-v4.1-flash`、`glm-5.3` 这些新模型。
+
+### 模型费用标记
+
+模型名后面直接标出免费还是收费、倍率多少、活动叫什么、免费到哪天：
+
+```
+Hy3 · 免费 · 限时免费 · 至2026-10-31
+Step-5-Preview · 免费 · 独家限免 · 至2026-10-25
+Hy4 preview · 0.29x · 夜间免费 · 至2026-10-31
+GLM-5.3 · 0.79x
+```
+
+截止日期由本地配置 `~/.config/piloveworkbuddy/promotions.json` 提供——
+后端接口不给这个字段，它只出现在 WorkBuddy 桌面端界面上。
+
+### 命令
+
+| 命令 | 作用 |
+|---|---|
+| `pi-love-workbuddy-gateway` | 启动网关 |
+| `pi-love-workbuddy-gateway models` | 打印模型清单 |
+| `pi-love-workbuddy-gateway models -pi` | 生成 pi 的 `models.json` |
+| `pi-love-workbuddy-gateway -version` | 打印版本号 |
+
+### 已知情况
+
+- 只支持 WorkBuddy **国内版**。
+- 只提供 pi 需要的两个接口：`GET /v1/models`、`POST /v1/chat/completions`。
+- 内容审核仍然是后端说了算。网关会在日志里记一条 `⚠️ 疑似内容审核拦截`，但不会自动脱敏。
+- 首次运行需要 WorkBuddy 桌面端已登录，因为登录态文件是加密的，密钥要从它那里取一次。
+- macOS 上下载的二进制未签名，首次运行可能被 Gatekeeper 拦。见 README 的说明。
+
+### 系统要求
+
+Windows / macOS / Linux 均可用，无需安装任何运行时。

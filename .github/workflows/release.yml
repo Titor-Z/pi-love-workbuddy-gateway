@@ -1,0 +1,73 @@
+name: Release
+
+# 规则：只有推送 v 开头的标签才会发布。
+# 日常提交、分支推送、PR 都不会触发本工作流。
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # 发布正文直接取 CHANGELOG.md。这份文件只写「即将发布的那一版」，
+      # 所以如果它还是空的或忘了写，这里直接拦下，避免发出一个没有说明的 Release。
+      - name: 校验发布说明
+        run: |
+          if [ ! -s CHANGELOG.md ]; then
+            echo "::error::CHANGELOG.md 为空。请先写入本版本的发布说明，再推送标签。"
+            exit 1
+          fi
+          if ! grep -qF "${GITHUB_REF_NAME}" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md 里没有出现版本号 ${GITHUB_REF_NAME}，确认写的是这一版吗？"
+            exit 1
+          fi
+
+      - name: 静态检查
+        run: go vet ./...
+
+      - name: 交叉编译各平台
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64; do
+            goos=${target%/*}
+            goarch=${target#*/}
+            suffix=""
+            [ "$goos" = "windows" ] && suffix=".exe"
+            name="pi-love-workbuddy-gateway_${VERSION}_${goos}_${goarch}"
+            GOOS=$goos GOARCH=$goarch CGO_ENABLED=0 \
+              go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+              -o "dist/${name}${suffix}" .
+            if [ "$goos" = "windows" ]; then
+              (cd dist && zip -q "${name}.zip" "${name}${suffix}")
+            else
+              tar -czf "dist/${name}.tar.gz" -C dist "${name}${suffix}"
+            fi
+            rm "dist/${name}${suffix}"
+          done
+          (cd dist && sha256sum *.tar.gz *.zip > checksums.txt)
+          ls -l dist
+
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file CHANGELOG.md \
+            --verify-tag
