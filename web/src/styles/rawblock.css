@@ -157,7 +157,14 @@ body {
 }
 
 body {
-  background: var(--paper);
+  /* 30px 网格底纹。只有极淡的一层，而且卡片是不透明的 ——
+     所以它只在**留白与间隙**里出现，不与表格线抢注意力。
+     它给的是「仪表盘画在坐标纸上的」那点意思。 */
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(color-mix(in srgb, var(--ink) 5%, transparent) 1px, transparent 1px),
+    linear-gradient(90deg, color-mix(in srgb, var(--ink) 5%, transparent) 1px, transparent 1px);
+  background-size: 30px 30px;
   color: var(--ink);
   font-family: var(--font-body);
   font-size: 15px;
@@ -363,8 +370,9 @@ footer {
    边框刻度见 design.md 第五节，四级钉死：5 结构 / 3 元素 / 2 元素内标记 / 1 数据行。
    禁止 4、6、8、10 等中间值——要更重就换手段（反白、硬投影、尺度差）。 */
 
+/* 分段留白要够大，否则「双模密度」的另一半 —— 大片留白 —— 就不存在。 */
 .section {
-  margin-bottom: 40px;
+  margin-bottom: 72px;
 }
 
 .section > header {
@@ -376,6 +384,15 @@ footer {
   padding-bottom: 8px;
   margin-bottom: 20px;
   flex-wrap: wrap;
+}
+
+/* ASCII 括号做分区标题。工业粗野主义的招牌做法：
+   用字符而不是图形来做装饰，因为字符本身就在排版体系里。 */
+.section > header h2::before {
+  content: "[ ";
+}
+.section > header h2::after {
+  content: " ]";
 }
 
 .section > header .hint {
@@ -391,8 +408,21 @@ footer {
   gap: 16px;
 }
 
+/* 双模密度：一页里要有**一个主角**，其余降为密集的元数据。
+   四个一样大的统计卡是最典型的「每样东西一样重」。
+   hero 拿 2/5 宽度、数字放到 clamp 最大 76px；其余三个各 1/5、数字 22px。
+   反差本身就是层级，不需要再多画线。 */
 .grid.stats {
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  grid-template-columns: 2fr 1fr 1fr 1fr;
+}
+
+@media (max-width: 900px) {
+  .grid.stats {
+    grid-template-columns: 1fr 1fr;
+  }
+  .stat.hero {
+    grid-column: span 2;
+  }
 }
 
 .grid.two {
@@ -412,6 +442,19 @@ footer {
 .stat {
   border: 5px solid var(--rule);
   padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+}
+
+/* 非主角的统计块收紧：它们提供的是背景数字，不该跟主角抢注意力。
+   行高由主角决定，所以用 space-between 把标签顶到上、注脚压到下。 */
+.stat {
+  justify-content: space-between;
+}
+
+.stat .value {
+  font-size: 24px;
+  word-break: normal;
 }
 
 .stat .label {
@@ -426,10 +469,26 @@ footer {
 
 .stat .value {
   font-family: var(--font-mono);
-  font-size: 34px;
+  font-size: 24px;
   line-height: 1.15;
   margin-top: 6px;
   word-break: break-all;
+}
+
+/* 主角的数字：可以大到出血。这是「极度悬殊的字号对比」，
+   工业粗野主义把它当作主要的结构手段。 */
+.stat.hero .value {
+  /* 上限压到 64px 是算出来的：主角列宽约 460px，
+     七位数字在最宽的等宽字体下约 0.7em/字，64px 时约 314px，留足余量。 */
+  font-size: clamp(44px, 6vw, 64px);
+  letter-spacing: -0.03em;
+  line-height: 0.95;
+  white-space: nowrap;
+}
+
+.stat.hero .value small {
+  font-size: 0.36em;
+  letter-spacing: 0;
 }
 
 .stat .value small {
@@ -462,7 +521,7 @@ footer {
 
 /* 硬投影：唯一允许的「浮起」手段。纯色位移，不是柔光。 */
 .lifted {
-  box-shadow: 8px 8px 0 var(--ink);
+  box-shadow: 8px 8px 0 var(--rule);
 }
 
 /* ── 表格 ─────────────────────────────────────────────── */
@@ -563,6 +622,11 @@ th.num {
 
 /* ── 控件 ─────────────────────────────────────────────── */
 
+/* 按钮的物理感：hover 浮起，按下沉回去。
+   这是本系统**唯一**的位移动画，也是唯一值得加的那种——
+   它是物理反馈（东西被按了），不是装饰。
+   用位移而不是柔光：位移属于印刷语言，柔光不属于。
+   注意 hover/active 都**不设过渡**，反馈必须立刻到位。 */
 button.action {
   font-family: var(--font-body);
   font-size: 12px;
@@ -576,13 +640,22 @@ button.action {
   cursor: pointer;
 }
 
+/* hover：抬起。反色 + 硬投影 + 位移，三个信号说的是同一件事。 */
 button.action:hover:not(:disabled) {
   background: var(--invert-bg);
   color: var(--invert-fg);
+  box-shadow: 4px 4px 0 var(--rule);
+  transform: translate(-2px, -2px);
 }
 
-button.action[aria-pressed="true"],
+/* 按下：投影消失、回到原位 —— 看起来就是被按下去了。 */
 button.action:active:not(:disabled) {
+  box-shadow: none;
+  transform: translate(0, 0);
+}
+
+/* 开关类按钮（aria-pressed）只反色，不抬起：它表示状态，不表示被按。 */
+button.action[aria-pressed="true"] {
   background: var(--invert-bg);
   color: var(--invert-fg);
 }
@@ -592,6 +665,8 @@ button.action:disabled {
   background: var(--disabled-bg);
   color: var(--disabled-fg);
   border-color: var(--disabled-rule);
+  box-shadow: none;
+  transform: none;
   cursor: not-allowed;
 }
 
@@ -603,6 +678,7 @@ button.action.danger {
 button.action.danger:hover:not(:disabled) {
   background: var(--error);
   color: var(--paper);
+  box-shadow: 4px 4px 0 var(--error);
 }
 
 textarea {

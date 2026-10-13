@@ -6,6 +6,7 @@
   import Settings from "./views/Settings.svelte";
   import Logs from "./views/Logs.svelte";
   import Status from "./views/Status.svelte";
+  import Confirm from "./lib/Confirm.svelte";
 
   // 路由用 hash：单二进制里的静态页不好做服务端路由，
   // 而 hash 刷新、分享、前后退都能正常工作。
@@ -24,8 +25,11 @@
 
   let route = $state(routeFromHash());
   let online = $state(false);
+  let failure = $state("");
   let version = $state("");
   let busy = $state("");
+  // 待确认的动作。null 表示没有对话框。
+  let pending = $state(null);
 
   $effect(() => {
     const onHashChange = () => (route = routeFromHash());
@@ -52,16 +56,37 @@
     };
   });
 
+  // 两个动作都要先问一次：pi 那边会短暂不可用，而且停止是不可逆的
+  // （停了就得回命令行拉起来，面板也跟着没了）。
+  const CONFIRMATIONS = {
+    stop: {
+      title: "停止网关",
+      message: "停止之后这个面板也会一起消失，只能回命令行重新启动。pi 那边立刻不可用。",
+      confirmLabel: "停止",
+      danger: true,
+    },
+    restart: {
+      title: "重启网关",
+      message: "网关会退出再拉起来，大约几秒。pi 那边这几秒里不可用。",
+      confirmLabel: "重启",
+      danger: false,
+    },
+  };
+
   async function control(kind) {
-    const verb = kind === "stop" ? "停止" : "重启";
-    if (!confirm(`确认${verb}网关？pi 那边会短暂不可用。`)) return;
+    pending = kind;
+  }
+
+  async function runControl(kind) {
+    pending = null;
     busy = kind;
     try {
       await api[kind]();
       // 停或重启之后连不上了，这是预期结果，等下轮探测把状态翻过来。
       online = false;
     } catch (cause) {
-      alert(`${verb}请求失败：${cause.message}`);
+      // 失败要看得到，但不用原生 alert()：放进顶部那条错误带里。
+      failure = `${kind === "stop" ? "停止" : "重启"}请求失败：${cause.message}`;
     }
     busy = "";
   }
@@ -94,6 +119,9 @@
   </header>
 
   <main>
+    {#if failure}
+      <div class="notice error">{failure}</div>
+    {/if}
     {#if !online}
       <div class="notice error">
         连不上网关。它可能没在运行，或者刚刚被停止 / 重启——稍等几秒，
@@ -102,6 +130,17 @@
     {/if}
     <route.component />
   </main>
+
+  {#if pending}
+    <Confirm
+      title={CONFIRMATIONS[pending].title}
+      message={CONFIRMATIONS[pending].message}
+      confirmLabel={CONFIRMATIONS[pending].confirmLabel}
+      danger={CONFIRMATIONS[pending].danger}
+      onConfirm={() => runControl(pending)}
+      onCancel={() => (pending = null)}
+    />
+  {/if}
 
   <footer>
     <span>本工具与腾讯 / WorkBuddy 无官方关联</span>
