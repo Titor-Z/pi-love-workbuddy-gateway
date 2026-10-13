@@ -12,11 +12,13 @@ import (
 
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/appdir"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/atrest"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/billing"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/config"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/daemon"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/gateway"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/upstream"
 )
@@ -27,8 +29,12 @@ const shutdownTimeout = 10 * time.Second
 // commandModels 是「打印模型清单」子命令；不写子命令时默认启动服务。
 const commandModels = "models"
 
-// commandServe 是显式启动服务的子命令。
+// commandServe 是「前台运行」子命令。
+// 默认是后台运行，这个子命令用于在终端里盯着日志。
 const commandServe = "serve"
+
+// commandBilling 是「查看余额」子命令。
+const commandBilling = "billing"
 
 // version 是编译期注入的版本号（-ldflags "-X main.version=..."），
 // 直接 go build 时为 dev。
@@ -54,8 +60,22 @@ func run(args []string) error {
 		}
 		return runModels(cfg)
 	}
+	if len(args) > 0 && args[0] == commandBilling {
+		cfg, err := config.Parse(args[1:], os.Stderr)
+		if err != nil {
+			return err
+		}
+		return runBilling(cfg)
+	}
 	if len(args) > 0 && args[0] == commandServe {
+		// serve 的意图是「就在这个终端里跑起来」，所以它强制前台。
 		args = args[1:]
+		cfg, err := config.Parse(args, os.Stderr)
+		if err != nil {
+			return err
+		}
+		cfg.Daemon = false
+		return runServe(cfg)
 	}
 	cfg, err := config.Parse(args, os.Stderr)
 	if err != nil {
@@ -100,8 +120,13 @@ func runServe(cfg *config.Config) error {
 	if err != nil {
 		return err
 	}
+	events, err := journal.Open(cfg.JournalPath)
+	if err != nil {
+		return err
+	}
+	defer events.Close()
 
-	server := gateway.NewServer(cfg, cred, upstream.NewClient(cred, ""), promotions, logger)
+	server := gateway.NewServer(cfg, cred, upstream.NewClient(cred, ""), promotions, logger, events)
 	httpServer := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           server.Handler(),
@@ -112,6 +137,7 @@ func runServe(cfg *config.Config) error {
 	logger.Printf("登录态：%s", cred.Path())
 	logger.Printf("密钥指纹：%s", cipher.KeyID())
 	logger.Printf("日志：%s", describeLogPath(cfg.LogPath))
+	logger.Printf("事件：%s", describeLogPath(cfg.JournalPath))
 	logger.Printf("监听：http://%s", cfg.ListenAddr)
 	logger.Printf("    GET  /health")
 	logger.Printf("    GET  /v1/models")
@@ -125,6 +151,9 @@ func runServe(cfg *config.Config) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	events.Append(journal.Record{Kind: journal.KindStart, Version: version,
+		Message: fmt.Sprintf("启动 %s，监听 %s", version, cfg.ListenAddr)})
+
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- httpServer.ListenAndServe() }()
 
@@ -136,6 +165,7 @@ func runServe(cfg *config.Config) error {
 		return err
 	case <-ctx.Done():
 		logger.Printf("收到退出信号，正在关闭")
+		events.Append(journal.Record{Kind: journal.KindStop, Message: "收到退出信号，正在关闭"})
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		return httpServer.Shutdown(shutdownCtx)
@@ -161,6 +191,19 @@ func runModels(cfg *config.Config) error {
 		return writePiModels(os.Stdout, entries, piGatewayBaseURL(cfg), cfg.APIKey)
 	}
 	return writeTable(os.Stdout, entries)
+}
+
+// runBilling 读取并打印账号的资源包（余额）。
+func runBilling(cfg *config.Config) error {
+	cred, _, err := buildCredential(cfg, nil)
+	if err != nil {
+		return err
+	}
+	snapshot, err := billing.NewClient(cred, "").Fetch(context.Background())
+	if err != nil {
+		return err
+	}
+	return writeBilling(os.Stdout, snapshot)
 }
 
 // buildCredential 定位登录态并派生解密器。report 允许为 nil。

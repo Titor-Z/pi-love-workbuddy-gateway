@@ -15,6 +15,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/config"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/upstream"
 )
@@ -29,12 +30,14 @@ type Server struct {
 	up         *upstream.Client
 	promotions *catalog.Promotions
 	logger     *logging.Logger
+	journal    *journal.Journal // 允许为 nil（测试场景）
 }
 
-// NewServer 构造网关。
+// NewServer 构造网关。events 允许为 nil。
 func NewServer(cfg *config.Config, cred *credential.Manager, up *upstream.Client,
-	promotions *catalog.Promotions, logger *logging.Logger) *Server {
-	return &Server{cfg: cfg, cred: cred, up: up, promotions: promotions, logger: logger}
+	promotions *catalog.Promotions, logger *logging.Logger, events *journal.Journal) *Server {
+	return &Server{cfg: cfg, cred: cred, up: up, promotions: promotions,
+		logger: logger, journal: events}
 }
 
 // Handler 返回本地网关的 HTTP 处理器。

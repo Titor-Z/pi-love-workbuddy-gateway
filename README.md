@@ -116,8 +116,9 @@ pi --model workbuddy/step-5-preview "帮我看看这个项目"
 
 | 命令 | 作用 |
 |---|---|
-| `pi-love-workbuddy-gateway` | 启动网关（按 Ctrl+C 停止） |
-| `pi-love-workbuddy-gateway -d` | 转入后台运行，关掉终端也不会停 |
+| `pi-love-workbuddy-gateway` | 启动网关。**默认转入后台**，命令立刻返回 |
+| `pi-love-workbuddy-gateway serve` | 在前台运行，日志直接打屏（调试用） |
+| `pi-love-workbuddy-gateway billing` | 打印资源包余额 |
 | `pi-love-workbuddy-gateway models` | 打印模型清单（带费用标记） |
 | `pi-love-workbuddy-gateway models -pi` | 输出 pi 的 `models.json` |
 | `pi-love-workbuddy-gateway -version` | 打印版本号 |
@@ -125,13 +126,19 @@ pi --model workbuddy/step-5-preview "帮我看看这个项目"
 ### 后台运行
 
 ```bash
-$ pi-love-workbuddy-gateway -d
+$ pi-love-workbuddy-gateway
 已转入后台，PID 59583
 日志：/Users/你/.config/piloveworkbuddy/gateway.log
 停止：kill 59583
 ```
 
-命令立刻就返回了，网关在后台继续干活。关掉终端、断开 SSH 都不影响它。
+**这是默认行为。** 命令立刻返回，网关在后台继续干活，关掉终端、断开 SSH 都不影响它。
+
+想在终端里盯着日志就在前面加 `serve`，或者用 `-d=false`：
+
+```bash
+pi-love-workbuddy-gateway serve
+```
 
 停止：
 
@@ -149,6 +156,21 @@ pkill -f pi-love-workbuddy-gateway
 详情见日志：/Users/你/.config/piloveworkbuddy/gateway.log
 ```
 
+### 查看余额
+
+```bash
+$ pi-love-workbuddy-gateway billing
+资源包                  本轮剩余  本轮总量  本轮已用  周期结束      到期
+CodeBuddy个人体验版       495.62   500      4.38    2026-10-31  2035-01-14
+CodeBuddy个人版拉新权益包    1500     1500     0       2026-11-14  2026-11-14
+
+合计剩余：2395.62
+读取于 2026-10-14 05:07:05（账单结算有 1～3 分钟延迟，刚发完的请求可能尚未计入）
+```
+
+注意最后那行提示：**账单结算有 1～3 分钟延迟，而且是按批到账的。**
+刚发完请求就来查，很可能看到「没扣」。这不是漏计。
+
 ### 可选参数
 
 | 参数 | 默认值 | 说明 |
@@ -158,8 +180,9 @@ pkill -f pi-love-workbuddy-gateway
 | `-auth-file` | 自动探测 | 手动指定登录态文件 |
 | `-at-rest-secret` | 自动获取 | 手动指定解密用的根密钥 |
 | `-promotions` | 见下 | 手动指定促销配置文件 |
-| `-log` | `~/.config/piloveworkbuddy/gateway.log` | 日志路径；显式传空串则只写屏幕 |
-| `-d` | 关 | 转入后台运行 |
+| `-log` | `~/.config/piloveworkbuddy/gateway.log` | 文本日志路径；显式传空串则只写屏幕 |
+| `-journal` | `~/.config/piloveworkbuddy/gateway.jsonl` | 结构化事件文件；留空则不记录 |
+| `-d` | **开** | 后台运行；`-d=false` 或 `serve` 则前台 |
 
 ---
 
@@ -186,8 +209,22 @@ Hy3 · 免费 · 限时免费 · 至2026-10-31
 ```
 ~/.config/piloveworkbuddy/
 ├─ promotions.json   ← 促销活动（免费到哪天）
-└─ gateway.log       ← 请求日志
+├─ gateway.log       ← 给人看的文本日志
+└─ gateway.jsonl     ← 给 Web 面板统计的结构化事件
 ```
+
+两个文件职责不同：`gateway.log` 是给人 `tail` 的，`gateway.jsonl` 是给面板读的。
+后者是 JSONL（一行一个 JSON），有专门的 `msg` 字段所以直接 `tail` 也不难读：
+
+```json
+{"t":"2026-10-14T05:07:44+08:00","kind":"chat","msg":"◀ glm-5.3 | 5.6s | 流式完成 | credit=1.34",
+ "model":"glm-5.3","credit":1.34,"in":8328,"out":13,"ms":5648,"status":200,"stream":true}
+```
+
+`credit` 就是资源包的扣减量，**与 `billing` 命令的数字口径一致**，不需要任何估算。
+被内容审核拦截时会多一个 `"blocked":true`。
+
+两个文件里都**不会出现任何令牌**。
 
 ### `gateway.log`
 

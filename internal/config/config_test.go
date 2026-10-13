@@ -78,21 +78,23 @@ func TestParseAllowsSilencingLog(t *testing.T) {
 	}
 }
 
-// TestParseDaemonFlag 默认前台运行，-d 才转后台。
+// TestParseDaemonFlag 后台运行是默认值——本项目带 Web 面板，
+// 主要用法是启动一次后长期在后台跑。
 func TestParseDaemonFlag(t *testing.T) {
-	cfg, err := Parse([]string{"-d"}, &bytes.Buffer{})
+	cfg, err := Parse(nil, &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("解析失败：%v", err)
 	}
 	if !cfg.Daemon {
-		t.Error("-d 应当开启后台模式")
+		t.Error("默认应当在后台运行")
 	}
 
-	cfg, err = Parse(nil, &bytes.Buffer{})
+	// 想在前台盯着日志时可以显式关掉。
+	cfg, err = Parse([]string{"-d=false"}, &bytes.Buffer{})
 	if err != nil {
 		t.Fatalf("解析失败：%v", err)
 	}
 	if cfg.Daemon {
-		t.Error("默认应当前台运行")
+		t.Error("-d=false 应当关闭后台模式")
 	}
 }

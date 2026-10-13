@@ -26,10 +26,15 @@ type Config struct {
 	// Promotions 是本地促销配置文件路径，用于补上后端不提供的免费截止日期；
 	// 留空时回退到默认位置。
 	Promotions string
+	// JournalPath 是结构化事件文件（JSONL）的路径，供 Web 面板统计；
+	// 与 -log 的文本日志职责不同，两者可以同时存在。
+	JournalPath string
 	// PiOutput 仅在 `models` 子命令下有意义：为真时输出 pi 的 models.json，
 	// 否则只打印人看的表格。
 	PiOutput bool
 	// Daemon 为真时脱离终端在后台运行，由父进程派生一个子进程后立即退出。
+	// **默认开启**：本项目带 Web 面板，主要用法是双击一下就长期在后台跑，
+	// 之后全部操作面板完成；想在终端里盯着日志时用 `serve` 子命令或 `-d=false`。
 	Daemon bool
 }
 
@@ -44,8 +49,9 @@ func Parse(args []string, errOut io.Writer) (*Config, error) {
 	fs.StringVar(&cfg.AtRestSecret, "at-rest-secret", "", "at-rest 根密钥（44 字符 base64），留空自动获取")
 	fs.StringVar(&cfg.LogPath, "log", appdir.LogPath(), "请求日志路径，留空只写标准输出")
 	fs.StringVar(&cfg.Promotions, "promotions", "", "促销配置文件路径，留空用默认位置")
+	fs.StringVar(&cfg.JournalPath, "journal", appdir.JournalPath(), "结构化事件文件路径，面板读这个；留空则不记录")
 	fs.BoolVar(&cfg.PiOutput, "pi", false, "（仅 models 子命令）输出 pi 的 models.json")
-	fs.BoolVar(&cfg.Daemon, "d", false, "后台运行（脱离终端）")
+	fs.BoolVar(&cfg.Daemon, "d", true, "后台运行（脱离终端）；在终端里看日志请用 serve 子命令或 -d=false")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}

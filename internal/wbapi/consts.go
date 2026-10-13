@@ -17,4 +17,13 @@ const (
 	// ModelsPath 是模型目录路径。后端返回的是实时目录（含倍率与促销标记），
 	// 比 WorkBuddy 客户端本地的 product.json 新得多。
 	ModelsPath = "/console/enterprises/personal/models"
+
+	// BillingBaseURL 是账单接口的根地址。它不在 copilot 域名下，
+	// 而是在 codebuddy.cn——实测不需要 Origin / Referer 等额外请求头，
+	// 凭据头就够了。
+	BillingBaseURL = "https://www.codebuddy.cn"
+	// BillingResourcePath 查资源包（余额）的路径，POST 空对象即可。
+	// 注意：它返回的整数 CapacityRemain 是包的总量，**不随消耗变化**；
+	// 真正反映消耗的是 CycleCapacityRemainPrecise / CycleCapacityUsedPrecise。
+	BillingResourcePath = "/v2/billing/meter/get-user-resource"
 )

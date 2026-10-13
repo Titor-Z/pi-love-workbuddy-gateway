@@ -229,6 +229,7 @@ func newGateway(t *testing.T, backend *fakeBackend, apiKey string, expiresAt tim
 		upstream.NewClient(cred, backend.URL()),
 		promotions,
 		logger,
+		nil, // 事件文件改为由专门的测试注入
 	)
 	return server.Handler(), authFile
 }

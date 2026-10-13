@@ -18,8 +18,11 @@ const DirName = "piloveworkbuddy"
 // PromotionsFileName 是促销配置的文件名。
 const PromotionsFileName = "promotions.json"
 
-// LogFileName 是默认日志文件名。
+// LogFileName 是默认日志文件名（人类读的文本日志）。
 const LogFileName = "gateway.log"
+
+// JournalFileName 是默认事件文件名（面板读的 JSONL）。
+const JournalFileName = "gateway.jsonl"
 
 // Root 返回用户配置根目录，即 $XDG_CONFIG_HOME 或 ~/.config。
 func Root() string {
@@ -47,6 +50,9 @@ func PromotionsPath() string { return join(Dir(), PromotionsFileName) }
 
 // LogPath 返回日志文件的默认路径。
 func LogPath() string { return join(Dir(), LogFileName) }
+
+// JournalPath 返回事件文件（JSONL）的默认路径。
+func JournalPath() string { return join(Dir(), JournalFileName) }
 
 // EnsureDir 确保配置目录存在，返回目录路径。
 func EnsureDir() (string, error) {

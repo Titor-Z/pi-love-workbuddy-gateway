@@ -4,9 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 )
 
 // defaultModel 是客户端没指定模型时的兜底值。
@@ -58,35 +61,84 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-		s.logger.Printf("✗ HTTP %d | %s | %s", resp.StatusCode, modelName, truncate(string(raw), 300))
+		message := fmt.Sprintf("✗ HTTP %d | %s | %s", resp.StatusCode, modelName, truncate(string(raw), 300))
+		s.logger.Printf("%s", message)
+		s.recordChat(journal.Record{
+			Kind: journal.KindChat, Model: modelName, Stream: streaming,
+			Status: resp.StatusCode, Millis: time.Since(started).Milliseconds(),
+			Message: message, Error: truncate(string(raw), 300),
+		})
 		writeUpstreamError(w, resp.StatusCode, raw)
 		return
 	}
 
-	cost := time.Since(started).Round(time.Millisecond)
-	watch := newFilterWatchReader(resp.Body)
+	observer := newStreamObserver(resp.Body)
 	if streaming {
-		s.relayStream(w, watch)
-		s.reportBlocked(modelName, watch)
-		s.logger.Printf("◀ %s | %s | 流式完成", modelName, cost)
+		s.relayStream(w, observer)
+		s.finishChat(modelName, observer, started, true, http.StatusOK, "")
 		return
 	}
-	result, err := aggregateStream(watch)
-	s.reportBlocked(modelName, watch)
+	result, err := aggregateStream(observer)
 	if err != nil {
-		s.logger.Printf("✗ 聚合流式响应失败 | %s | %v", modelName, err)
+		message := fmt.Sprintf("✗ 聚合流式响应失败 | %s | %v", modelName, err)
+		s.logger.Printf("%s", message)
+		s.recordChat(journal.Record{
+			Kind: journal.KindChat, Model: modelName,
+			Status: http.StatusBadGateway, Millis: time.Since(started).Milliseconds(),
+			Message: message, Error: err.Error(),
+		})
 		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
 	}
-	s.logger.Printf("◀ %s | %s | 非流式完成", modelName, cost)
+	s.finishChat(modelName, observer, started, false, http.StatusOK, "")
 	writeJSON(w, http.StatusOK, result)
 }
 
-// reportBlocked 在响应命中内容审核标记时记一条告警。
-// 命中数除以请求总数即为拦截率，用于决定要不要移植脱敏。
-func (s *Server) reportBlocked(modelName string, watch *filterWatchReader) {
-	if watch.Blocked() {
-		s.logger.Printf("⚠️ 疑似内容审核拦截 | %s", modelName)
+// finishChat 在请求结束时记一条事件，并补一条人类可读的日志。
+// 流式与非流式共用同一条记录路径，避免两边统计口径不一致。
+func (s *Server) finishChat(modelName string, observer *streamObserver,
+	started time.Time, streaming bool, status int, failure string) {
+
+	cost := time.Since(started).Round(time.Millisecond)
+	usage := observer.Usage()
+
+	// 用量全为零时说明后端没发用量事件，这时不该在面板上凭空多出一次零消耗调用，
+	// 但请求本身确实发生了，所以照记，只是记为不计费。
+	mode := "非流式"
+	if streaming {
+		mode = "流式"
+	}
+	blockedTag := ""
+	if observer.Blocked() {
+		blockedTag = " | ⚠️疑似内容审核拦截"
+	}
+	message := fmt.Sprintf("◀ %s | %s | %s完成 | credit=%g%s",
+		modelName, cost, mode, usage.Credit, blockedTag)
+	if failure == "" {
+		s.logger.Printf("%s", message)
+	} else {
+		s.logger.Printf("✗ %s", message)
+	}
+
+	s.recordChat(journal.Record{
+		Kind:    journal.KindChat,
+		Message: message,
+		Model:   modelName,
+		Credit:  usage.Credit,
+		In:      usage.Prompt,
+		Out:     usage.Completion,
+		Millis:  cost.Milliseconds(),
+		Status:  status,
+		Stream:  streaming,
+		Blocked: observer.Blocked(),
+		Error:   failure,
+	})
+}
+
+// recordChat 把事件写入 journal。没接 journal 时静默跳过，便于测试单独跑网关。
+func (s *Server) recordChat(record journal.Record) {
+	if s.journal != nil {
+		s.journal.Append(record)
 	}
 }
 
