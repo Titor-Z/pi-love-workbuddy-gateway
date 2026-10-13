@@ -198,13 +198,26 @@
       <div class="card tight">
         <table>
           <thead>
-            <tr><th>模型</th><th class="num">请求</th><th class="num">消耗</th><th class="num">占比</th></tr>
+            <tr>
+              <th>模型</th>
+              <th class="num">请求</th>
+              <th class="num">输入</th>
+              <th class="num">命中</th>
+              <th class="num">消耗</th>
+              <th class="num">占比</th>
+            </tr>
           </thead>
           <tbody>
             {#each usage.models as model (model.model)}
               <tr>
                 <td class="num">{model.model}</td>
                 <td class="num">{model.requests}</td>
+                <td class="num">{fmt.tokens(model.in)}</td>
+                <td class="num">
+                  {model.cached
+                    ? `${fmt.tokens(model.cached)} ${model.in > 0 ? fmt.percent(model.cached / model.in) : ""}`
+                    : "—"}
+                </td>
                 <td class="num">{fmt.credit(model.credit)}</td>
                 <td class="num">
                   {totals.credit > 0 ? fmt.percent(model.credit / totals.credit) : "—"}

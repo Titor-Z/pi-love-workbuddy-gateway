@@ -108,12 +108,16 @@ func (s *Server) finishChat(modelName string, observer *streamObserver,
 	if streaming {
 		mode = "流式"
 	}
+	cacheTag := ""
+	if cached := usage.Cached(); cached > 0 {
+		cacheTag = fmt.Sprintf(" | 缓存命中 %d/%d", cached, usage.Prompt)
+	}
 	blockedTag := ""
 	if observer.Blocked() {
 		blockedTag = " | ⚠️疑似内容审核拦截"
 	}
-	message := fmt.Sprintf("◀ %s | %s | %s完成 | credit=%g%s",
-		modelName, cost, mode, usage.Credit, blockedTag)
+	message := fmt.Sprintf("◀ %s | %s | %s完成 | credit=%g%s%s",
+		modelName, cost, mode, usage.Credit, cacheTag, blockedTag)
 	if failure == "" {
 		s.logger.Printf("%s", message)
 	} else {
@@ -127,6 +131,7 @@ func (s *Server) finishChat(modelName string, observer *streamObserver,
 		Credit:  usage.Credit,
 		In:      usage.Prompt,
 		Out:     usage.Completion,
+		Cached:  usage.Cached(),
 		Millis:  cost.Milliseconds(),
 		Status:  status,
 		Stream:  streaming,

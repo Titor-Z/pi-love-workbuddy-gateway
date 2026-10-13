@@ -28,6 +28,25 @@ type usageInfo struct {
 	Prompt     int     `json:"prompt_tokens"`
 	Completion int     `json:"completion_tokens"`
 	Total      int     `json:"total_tokens"`
+
+	// CacheHit 是输入里命中缓存的那部分 token 数。
+	// 后端同时给了 prompt_cache_hit_tokens 与 prompt_tokens_details.cached_tokens，
+	// 两个值一致；这里以前者为准，后者兜底。它直接回答「这次为什么便宜」。
+	CacheHit  int `json:"prompt_cache_hit_tokens"`
+	CacheMiss int `json:"prompt_cache_miss_tokens"`
+
+	// Details 用于在 CacheHit 缺失时兜底取值。
+	Details struct {
+		Cached int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
+}
+
+// Cached 返回命中缓存的 token 数，两个字段都缺时返回 0。
+func (u usageInfo) Cached() int {
+	if u.CacheHit > 0 {
+		return u.CacheHit
+	}
+	return u.Details.Cached
 }
 
 // streamObserver 在把字节原样透传的同时，顺带观察两件事：

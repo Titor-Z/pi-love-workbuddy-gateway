@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"io"
 	"testing"
 )
@@ -188,5 +189,41 @@ func TestObserverBadLineDoesNotPoisonMarkerScan(t *testing.T) {
 	observer := drain(t, []byte(`data: {"content":"这个话题敏感"}`+"\n"))
 	if !observer.Blocked() {
 		t.Error("跨机制影响：审核标记漏检了")
+	}
+}
+
+// TestObserverExtractsCacheHit 缓存命中直接决定这次贵不贵，必须取到。
+func TestObserverExtractsCacheHit(t *testing.T) {
+	reader := newStreamObserver(bytes.NewReader([]byte(
+		`data: {"choices":[],"usage":{"prompt_tokens":18,"completion_tokens":89,` +
+			`"prompt_cache_hit_tokens":17,"prompt_cache_miss_tokens":1,"credit":0.05}}` + "\n")))
+
+	_, _ = io.ReadAll(reader)
+	if got := reader.Usage().Cached(); got != 17 {
+		t.Errorf("Cached() = %d，期望 17", got)
+	}
+}
+
+// TestObserverCacheHitFallsBackToDetails 后端有时只给 details.cached_tokens，
+// 这时不能记成 0——记 0 会让面板上凭空多出一次「没有命中缓存」。
+func TestObserverCacheHitFallsBackToDetails(t *testing.T) {
+	reader := newStreamObserver(bytes.NewReader([]byte(
+		`data: {"choices":[],"usage":{"prompt_tokens":100,"credit":0.2,` +
+			`"prompt_tokens_details":{"cached_tokens":64}}}` + "\n")))
+
+	_, _ = io.ReadAll(reader)
+	if got := reader.Usage().Cached(); got != 64 {
+		t.Errorf("Cached() = %d，期望回退到 details 的 64", got)
+	}
+}
+
+// TestObserverCacheHitAbsent 两个字段都没有时返回 0，而不是把 Prompt 当成命中。
+func TestObserverCacheHitAbsent(t *testing.T) {
+	reader := newStreamObserver(bytes.NewReader([]byte(
+		`data: {"choices":[],"usage":{"prompt_tokens":100,"credit":0.2}}` + "\n")))
+
+	_, _ = io.ReadAll(reader)
+	if got := reader.Usage().Cached(); got != 0 {
+		t.Errorf("Cached() = %d，期望 0", got)
 	}
 }

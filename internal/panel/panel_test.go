@@ -189,7 +189,8 @@ func TestUsageAggregate(t *testing.T) {
 	from := startOfDay(now).AddDate(0, 0, -2) // 3 天窗口
 
 	records := []journal.Record{
-		{Time: from.Add(2 * time.Hour), Kind: journal.KindChat, Model: "glm-5.3", Credit: 1.12},
+		{Time: from.Add(2 * time.Hour), Kind: journal.KindChat, Model: "glm-5.3",
+			Credit: 1.12, In: 18, Out: 89, Cached: 17},
 		{Time: from.Add(3 * time.Hour), Kind: journal.KindChat, Model: "glm-5.3", Credit: 0.25},
 		{Time: from.AddDate(0, 0, 1).Add(time.Hour), Kind: journal.KindChat,
 			Model: "minimax-m3", Credit: 0.72, Blocked: true},
@@ -231,12 +232,27 @@ func TestUsageAggregate(t *testing.T) {
 	if got.Totals.BlockRate != 0.25 {
 		t.Fatalf("拦截率 = %v，想要 0.25", got.Totals.BlockRate)
 	}
+	// 只有第一条带了 token 数，所以命中率就是 17/18。
+	if got.Totals.In != 18 || got.Totals.Out != 89 || got.Totals.Cached != 17 {
+		t.Fatalf("token 汇总不对：in=%d out=%d cached=%d",
+			got.Totals.In, got.Totals.Out, got.Totals.Cached)
+	}
+	if got.Totals.CacheRate != 0.9444 {
+		t.Fatalf("缓存命中率 = %v，想要 0.9444", got.Totals.CacheRate)
+	}
+	// 没有 token 数据时不出现除零。
+	if got.Days[2].Requests != 1 || got.Days[2].Cached != 0 {
+		t.Fatalf("缺 token 的那天不该被算成有缓存：%+v", got.Days[2])
+	}
 	// 按模型汇总要按消耗降序，且 glm 在前。
 	if len(got.Models) != 2 || got.Models[0].Model != "glm-5.3" {
 		t.Fatalf("模型汇总顺序不对：%+v", got.Models)
 	}
 	if got.Models[0].Credit != 1.37 || got.Models[1].Credit != 1.22 {
 		t.Fatalf("模型汇总数值不对：%+v", got.Models)
+	}
+	if got.Models[0].Cached != 17 || got.Models[0].In != 18 {
+		t.Fatalf("模型维度的 token 没有汇总：%+v", got.Models[0])
 	}
 }
 

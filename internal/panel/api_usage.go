@@ -19,6 +19,9 @@ type usageDay struct {
 	Requests int                `json:"requests"` // 当天请求数
 	Credit   float64            `json:"credit"`   // 当天消耗
 	Blocked  int                `json:"blocked"`  // 当天被内容审核拦下的次数
+	In       int                `json:"in"`       // 当天输入 token
+	Out      int                `json:"out"`      // 当天输出 token
+	Cached   int                `json:"cached"`   // 其中命中缓存的输入 token
 	ByModel  map[string]float64 `json:"by_model"` // 按模型拆分的消耗，用于堆叠
 }
 
@@ -27,6 +30,9 @@ type usageModel struct {
 	Model    string  `json:"model"`
 	Requests int     `json:"requests"`
 	Credit   float64 `json:"credit"`
+	In       int     `json:"in"`
+	Out      int     `json:"out"`
+	Cached   int     `json:"cached"`
 }
 
 // usageTotals 是窗口内的合计。
@@ -35,6 +41,13 @@ type usageTotals struct {
 	Credit    float64 `json:"credit"`
 	Blocked   int     `json:"blocked"`
 	BlockRate float64 `json:"block_rate"` // 命中数 ÷ 请求数
+
+	In     int `json:"in"`
+	Out    int `json:"out"`
+	Cached int `json:"cached"`
+	// CacheRate 是命中缓存的输入占全部输入的比例。
+	// 它回答「为什么这次的 credit 比上次高」——同样的对话，命中率掉下来就贵。
+	CacheRate float64 `json:"cache_rate"`
 }
 
 // usageResponse 是用量页的数据。
@@ -114,6 +127,9 @@ func aggregate(records []journal.Record, from, to time.Time, days int) usageResp
 		day := &response.Days[slot]
 		day.Requests++
 		day.Credit += record.Credit
+		day.In += record.In
+		day.Out += record.Out
+		day.Cached += record.Cached
 		day.ByModel[model] += record.Credit
 		if record.Blocked {
 			day.Blocked++
@@ -126,9 +142,15 @@ func aggregate(records []journal.Record, from, to time.Time, days int) usageResp
 		}
 		entry.Requests++
 		entry.Credit += record.Credit
+		entry.In += record.In
+		entry.Out += record.Out
+		entry.Cached += record.Cached
 
 		response.Totals.Requests++
 		response.Totals.Credit += record.Credit
+		response.Totals.In += record.In
+		response.Totals.Out += record.Out
+		response.Totals.Cached += record.Cached
 		if record.Blocked {
 			response.Totals.Blocked++
 		}
@@ -157,6 +179,10 @@ func aggregate(records []journal.Record, from, to time.Time, days int) usageResp
 	if response.Totals.Requests > 0 {
 		response.Totals.BlockRate = round4(
 			float64(response.Totals.Blocked) / float64(response.Totals.Requests))
+	}
+	if response.Totals.In > 0 {
+		response.Totals.CacheRate = round4(
+			float64(response.Totals.Cached) / float64(response.Totals.In))
 	}
 	return response
 }

@@ -55,9 +55,12 @@ type Record struct {
 	Credit float64 `json:"credit,omitempty"`
 	In     int     `json:"in,omitempty"`
 	Out    int     `json:"out,omitempty"`
-	Millis int64   `json:"ms,omitempty"`
-	Status int     `json:"status,omitempty"`
-	Stream bool    `json:"stream,omitempty"`
+	// Cached 是输入里命中缓存的 token 数。命中越多越便宜，所以单独留一列，
+	// 面板可以用它回答「这次为什么比上次贵」。
+	Cached int   `json:"cached,omitempty"`
+	Millis int64 `json:"ms,omitempty"`
+	Status int   `json:"status,omitempty"`
+	Stream bool  `json:"stream,omitempty"`
 
 	// Blocked 表示这次响应里出现了内容审核标记。
 	// 它是面板上「拦截率」的唯一来源，务必如实记录。
