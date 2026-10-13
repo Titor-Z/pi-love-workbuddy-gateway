@@ -66,7 +66,15 @@
 </div>
 
 <style>
+  /* 入场。模态是罕见事件，而且「突然出现」本身就是一个生硬的变化——
+     动效的职责正是消除它。
+     用 160ms + ease-out：UI 动效必须短，而且进入用 ease-out（ease-in 会
+     把用户最关注的那一刻往后拖）。
+     从 scale(0.97) 起而不是 scale(0)：没有东西是从「无」里出现的。
+     模态在原点上是豁免的（保持居中，不锚定触发物）。 */
   .scrim {
+    opacity: 1;
+    transition: opacity 160ms ease-out;
     position: fixed;
     inset: 0;
     z-index: 100;
@@ -80,6 +88,9 @@
   }
 
   .dialog {
+    opacity: 1;
+    transform: scale(1);
+    transition: opacity 160ms ease-out, transform 160ms ease-out;
     max-width: 460px;
     width: 100%;
     /* 玻璃。背后是被压暗的页面内容 —— 这里才是它真正显形的地方。 */
@@ -109,6 +120,30 @@
     display: flex;
     gap: 12px;
     flex-wrap: wrap;
+  }
+
+  @starting-style {
+    .scrim {
+      opacity: 0;
+    }
+    .dialog {
+      opacity: 0;
+      transform: scale(0.97);
+    }
+  }
+
+  /* 减少动态效果时要「更轻」而不是「全无」：
+     去掉位移，保留透明度——渐变本身帮助理解，不造成不适。 */
+  @media (prefers-reduced-motion: reduce) {
+    .dialog {
+      transform: none;
+      transition: opacity 120ms ease-out;
+    }
+    @starting-style {
+      .dialog {
+        transform: none;
+      }
+    }
   }
 
   /* 有人把系统的「减少透明度」打开了，就别硬上。 */

@@ -129,31 +129,43 @@
   {#if !billing}
     <div class="empty">读取中…</div>
   {:else}
-    <div class="grid two">
-      <!-- 用下标当 key：后端可能给出两个同名的资源包（例如两个「国内运营裂变包」），
-           拿名字当 key 会让 Svelte 直接抛错，整页渲染中断。 -->
-      {#each billing.packages as pack, index (index)}
-        {@const ratio = pack.size > 0 ? pack.remain / pack.size : 0}
-        <div class="card">
-          <div style="display:flex;justify-content:space-between;gap:12px;align-items:flex-start">
-            <strong style="font-size:14px">{packageLabels[index]}</strong>
-            {#if pack.remain <= 0}
-              <span class="tag blocked">已用完</span>
-            {:else if ratio < 0.2}
-              <span class="tag promo">偏低</span>
-            {/if}
-          </div>
-          <div class="num" style="font-size:28px;margin-top:8px">
-            {fmt.credit(pack.remain)}<small style="font-size:15px"> / {fmt.credit(pack.size)}</small>
-          </div>
-          <div class="sub num" style="font-size:11px;color:var(--muted)">
-            本轮已用 {fmt.credit(pack.use)}
-          </div>
-          <div class="sub num" style="font-size:11px;color:var(--muted)">
-            周期结束 {fmt.date(pack.cycle_end)} · 到期 {fmt.date(pack.expire)}
-          </div>
-        </div>
-      {/each}
+    <!-- 这里是表格，不是卡片。
+         四个长得一模一样的卡片格是典型的「AI 味」（impeccable-design-polish 的清单里
+         明确列了这一条），而且它本来就是表格数据：名称 / 剩余 / 总量 / 已用 / 到期。
+         表格更密、更省地方，而且数字能对着列比——这才是有用的部分。 -->
+    <div class="card tight">
+      <table>
+        <thead>
+          <tr>
+            <th>资源包</th>
+            <th class="num">本轮剩余</th>
+            <th class="num">本轮总量</th>
+            <th class="num">本轮已用</th>
+            <th>周期结束</th>
+            <th>到期</th>
+          </tr>
+        </thead>
+        <tbody>
+          {#each billing.packages as pack, index (index)}
+            {@const ratio = pack.size > 0 ? pack.remain / pack.size : 0}
+            <tr>
+              <td>
+                {packageLabels[index]}
+                {#if pack.remain <= 0}
+                  <span class="tag blocked">已用完</span>
+                {:else if ratio < 0.2}
+                  <span class="tag promo">偏低</span>
+                {/if}
+              </td>
+              <td class="num">{fmt.credit(pack.remain)}</td>
+              <td class="num">{fmt.credit(pack.size)}</td>
+              <td class="num">{fmt.credit(pack.use)}</td>
+              <td class="num">{fmt.date(pack.cycle_end)}</td>
+              <td class="num">{fmt.date(pack.expire)}</td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
     </div>
     <p class="hint" style="font-family:var(--font-mono);font-size:11px;color:var(--muted);margin-top:12px">
       读取于 {fmt.time(billing.fetched_at)} · {billing.settle_hint}

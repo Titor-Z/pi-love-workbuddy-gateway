@@ -640,12 +640,22 @@ button.action {
   cursor: pointer;
 }
 
-/* hover：抬起。反色 + 硬投影 + 位移，三个信号说的是同一件事。 */
-button.action:hover:not(:disabled) {
-  background: var(--invert-bg);
-  color: var(--invert-fg);
-  box-shadow: 4px 4px 0 var(--rule);
-  transform: translate(-2px, -2px);
+/* hover：抬起。反色 + 硬投影 + 位移，三个信号说的是同一件事。
+   **必须门控在「真的能用 hover 的设备」上**：触屏上 `:hover` 会在点按之后
+   粘住不散，按钮就一直浮在半空。指针设备的触摸板/鼠标才给这个状态。 */
+@media (hover: hover) and (pointer: fine) {
+  button.action:hover:not(:disabled) {
+    background: var(--invert-bg);
+    color: var(--invert-fg);
+    box-shadow: 4px 4px 0 var(--rule);
+    transform: translate(-2px, -2px);
+  }
+
+  button.action.danger:hover:not(:disabled) {
+    background: var(--error);
+    color: var(--paper);
+    box-shadow: 4px 4px 0 var(--error);
+  }
 }
 
 /* 按下：投影消失、回到原位 —— 看起来就是被按下去了。 */
@@ -673,12 +683,6 @@ button.action:disabled {
 button.action.danger {
   border-color: var(--error);
   color: var(--error);
-}
-
-button.action.danger:hover:not(:disabled) {
-  background: var(--error);
-  color: var(--paper);
-  box-shadow: 4px 4px 0 var(--error);
 }
 
 textarea {
