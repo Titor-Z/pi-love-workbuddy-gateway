@@ -20,9 +20,14 @@ type Logger struct {
 
 // New 构造日志器。path 为空时只写标准输出。
 // path 的父目录不存在时会自动创建，避免首次运行因目录未建而启动失败。
-func New(path string) (*Logger, error) {
-	logger := &Logger{sink: os.Stdout}
+//
+// alsoStdout 为真且指定了文件时，同时写文件与标准输出（前台运行想边看边记录）；
+// 为假时只写文件——后台运行时子进程的标准输出已经指向同一个文件，
+// 再写一遍会让每行日志重复出现。
+func New(path string, alsoStdout bool) (*Logger, error) {
+	logger := &Logger{}
 	if path == "" {
+		logger.sink = os.Stdout
 		return logger, nil
 	}
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
@@ -35,7 +40,11 @@ func New(path string) (*Logger, error) {
 		return nil, fmt.Errorf("打开日志文件失败：%w", err)
 	}
 	logger.file = file
-	logger.sink = io.MultiWriter(os.Stdout, file)
+	if alsoStdout {
+		logger.sink = io.MultiWriter(os.Stdout, file)
+	} else {
+		logger.sink = file
+	}
 	return logger, nil
 }
 

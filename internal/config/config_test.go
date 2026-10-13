@@ -77,3 +77,22 @@ func TestParseAllowsSilencingLog(t *testing.T) {
 		t.Errorf("LogPath = %q，期望空串", cfg.LogPath)
 	}
 }
+
+// TestParseDaemonFlag 默认前台运行，-d 才转后台。
+func TestParseDaemonFlag(t *testing.T) {
+	cfg, err := Parse([]string{"-d"}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("解析失败：%v", err)
+	}
+	if !cfg.Daemon {
+		t.Error("-d 应当开启后台模式")
+	}
+
+	cfg, err = Parse(nil, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("解析失败：%v", err)
+	}
+	if cfg.Daemon {
+		t.Error("默认应当前台运行")
+	}
+}

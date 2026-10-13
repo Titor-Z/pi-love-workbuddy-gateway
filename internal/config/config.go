@@ -29,6 +29,8 @@ type Config struct {
 	// PiOutput 仅在 `models` 子命令下有意义：为真时输出 pi 的 models.json，
 	// 否则只打印人看的表格。
 	PiOutput bool
+	// Daemon 为真时脱离终端在后台运行，由父进程派生一个子进程后立即退出。
+	Daemon bool
 }
 
 // Parse 从命令行参数解析配置。args 不含程序名本身。
@@ -43,6 +45,7 @@ func Parse(args []string, errOut io.Writer) (*Config, error) {
 	fs.StringVar(&cfg.LogPath, "log", appdir.LogPath(), "请求日志路径，留空只写标准输出")
 	fs.StringVar(&cfg.Promotions, "promotions", "", "促销配置文件路径，留空用默认位置")
 	fs.BoolVar(&cfg.PiOutput, "pi", false, "（仅 models 子命令）输出 pi 的 models.json")
+	fs.BoolVar(&cfg.Daemon, "d", false, "后台运行（脱离终端）")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
 	}

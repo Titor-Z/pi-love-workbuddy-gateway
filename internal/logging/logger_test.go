@@ -9,7 +9,7 @@ import (
 
 // TestNewWithoutPath 不指定文件时只写标准输出，Close 也要能安全调用。
 func TestNewWithoutPath(t *testing.T) {
-	logger, err := New("")
+	logger, err := New("", true)
 	if err != nil {
 		t.Fatalf("构造失败：%v", err)
 	}
@@ -29,7 +29,7 @@ func TestNewWithoutPath(t *testing.T) {
 // TestPrintfWritesToFile 日志要真的落到文件里，并带时间戳。
 func TestPrintfWritesToFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "converter.log")
-	logger, err := New(path)
+	logger, err := New(path, true)
 	if err != nil {
 		t.Fatalf("构造失败：%v", err)
 	}
@@ -58,7 +58,7 @@ func TestPrintfWritesToFile(t *testing.T) {
 func TestPrintfAppends(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "converter.log")
 	for _, line := range []string{"第一次运行", "第二次运行"} {
-		logger, err := New(path)
+		logger, err := New(path, true)
 		if err != nil {
 			t.Fatalf("构造失败：%v", err)
 		}
@@ -75,11 +75,32 @@ func TestPrintfAppends(t *testing.T) {
 	}
 }
 
+// TestNewWithoutStdoutWritesOnlyFile 后台运行时会关掉标准输出那一份，
+// 因为子进程的标准输出已经指向同一个日志文件，再写一遍每行就重复了。
+func TestNewWithoutStdoutWritesOnlyFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gateway.log")
+	logger, err := New(path, false)
+	if err != nil {
+		t.Fatalf("构造失败：%v", err)
+	}
+	logger.Printf("只写文件")
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close 报错：%v", err)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读取日志失败：%v", err)
+	}
+	if !strings.Contains(string(raw), "只写文件") {
+		t.Errorf("日志没落盘：\n%s", string(raw))
+	}
+}
+
 // TestNewCreatesMissingDirectory 默认日志路径的目录在首次运行时还不存在，
 // 要能自动建出来，否则一启动就失败。
 func TestNewCreatesMissingDirectory(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nested", "deeper", "gateway.log")
-	logger, err := New(path)
+	logger, err := New(path, true)
 	if err != nil {
 		t.Fatalf("应当自动创建目录：%v", err)
 	}
@@ -100,7 +121,7 @@ func TestNewRejectsBadPath(t *testing.T) {
 	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
 		t.Fatalf("准备测试介质失败：%v", err)
 	}
-	if _, err := New(filepath.Join(blocker, "gateway.log")); err == nil {
+	if _, err := New(filepath.Join(blocker, "gateway.log"), true); err == nil {
 		t.Fatal("父路径不是目录时应当报错")
 	}
 }

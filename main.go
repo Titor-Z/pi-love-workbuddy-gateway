@@ -15,6 +15,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/config"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/daemon"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/gateway"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/upstream"
@@ -40,44 +41,57 @@ func main() {
 	}
 }
 
-// run 按子命令分发。
+// run 解析参数并按子命令分发。
 func run(args []string) error {
 	if hasVersionFlag(args) {
 		fmt.Printf("pi-love-workbuddy-gateway %s\n", version)
 		return nil
 	}
-	if len(args) > 0 {
-		switch args[0] {
-		case commandModels:
-			return runModels(args[1:])
-		case commandServe:
-			return runServe(args[1:])
+	if len(args) > 0 && args[0] == commandModels {
+		cfg, err := config.Parse(args[1:], os.Stderr)
+		if err != nil {
+			return err
 		}
+		return runModels(cfg)
 	}
-	return runServe(args)
-}
-
-// hasVersionFlag 判断命令行里有没有请求打印版本号。
-func hasVersionFlag(args []string) bool {
-	for _, arg := range args {
-		if arg == "-version" || arg == "--version" {
-			return true
-		}
+	if len(args) > 0 && args[0] == commandServe {
+		args = args[1:]
 	}
-	return false
-}
-
-// runServe 装配各模块并启动 HTTP 服务，直到收到中断信号。
-func runServe(args []string) error {
 	cfg, err := config.Parse(args, os.Stderr)
 	if err != nil {
 		return err
 	}
-	logger, err := logging.New(cfg.LogPath)
+	// 后台模式：派生一个脱离终端的子进程，父进程随即退出。
+	// 子进程带着 daemon.IsChild() 为真，因此不会再次派生。
+	if cfg.Daemon && !daemon.IsChild() {
+		return runInBackground(cfg, args)
+	}
+	return runServe(cfg)
+}
+
+// runInBackground 派生后台进程并把 PID 报给用户，方便随时停掉。
+func runInBackground(cfg *config.Config, args []string) error {
+	pid, err := daemon.Start(args, cfg.LogPath)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("已转入后台，PID %d\n", pid)
+	if cfg.LogPath != "" {
+		fmt.Printf("日志：%s\n", cfg.LogPath)
+	}
+	fmt.Printf("停止：kill %d\n", pid)
+	return nil
+}
+
+// runServe 装配各模块并启动 HTTP 服务，直到收到中断信号。
+func runServe(cfg *config.Config) error {
+	// 后台运行时子进程的标准输出已指向日志文件，再写一遍会让每行重复。
+	logger, err := logging.New(cfg.LogPath, !daemon.IsChild())
 	if err != nil {
 		return err
 	}
 	defer logger.Close()
+
 	cred, cipher, err := buildCredential(cfg, logger.Printf)
 	if err != nil {
 		return err
@@ -97,16 +111,16 @@ func runServe(args []string) error {
 	logger.Printf("版本：%s", version)
 	logger.Printf("登录态：%s", cred.Path())
 	logger.Printf("密钥指纹：%s", cipher.KeyID())
-	logger.Printf("日志：%s", cfg.LogPath)
+	logger.Printf("日志：%s", describeLogPath(cfg.LogPath))
 	logger.Printf("监听：http://%s", cfg.ListenAddr)
 	logger.Printf("    GET  /health")
 	logger.Printf("    GET  /v1/models")
 	logger.Printf("    POST /v1/chat/completions")
-	logger.Printf("提示：本软件为第三方工具，与腾讯 / WorkBuddy 无官方关联，" +
-		"使用风险自负；完整条款见 README 的《免责声明》。")
 	if cfg.APIKey != "" {
 		logger.Printf("已启用本地访问密钥校验")
 	}
+	logger.Printf("提示：本软件为第三方工具，与腾讯 / WorkBuddy 无官方关联，" +
+		"使用风险自负；完整条款见 README 的《免责声明》。")
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -129,11 +143,7 @@ func runServe(args []string) error {
 }
 
 // runModels 拉取实时模型目录并打印，可选输出成 pi 的 models.json。
-func runModels(args []string) error {
-	cfg, err := config.Parse(args, os.Stderr)
-	if err != nil {
-		return err
-	}
+func runModels(cfg *config.Config) error {
 	cred, _, err := buildCredential(cfg, nil)
 	if err != nil {
 		return err
@@ -172,4 +182,22 @@ func resolvePromotionsPath(cfg *config.Config) string {
 		return cfg.Promotions
 	}
 	return appdir.PromotionsPath()
+}
+
+// describeLogPath 把「不落盘」这种情况说清楚，而不是让日志行以空值结尾。
+func describeLogPath(path string) string {
+	if path == "" {
+		return "（未启用，只写标准输出）"
+	}
+	return path
+}
+
+// hasVersionFlag 判断命令行里有没有请求打印版本号。
+func hasVersionFlag(args []string) bool {
+	for _, arg := range args {
+		if arg == "-version" || arg == "--version" {
+			return true
+		}
+	}
+	return false
 }

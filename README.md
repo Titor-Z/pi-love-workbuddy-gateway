@@ -116,9 +116,38 @@ pi --model workbuddy/step-5-preview "帮我看看这个项目"
 
 | 命令 | 作用 |
 |---|---|
-| `pi-love-workbuddy-gateway` | 启动网关（默认 `127.0.0.1:8788`） |
+| `pi-love-workbuddy-gateway` | 启动网关（按 Ctrl+C 停止） |
+| `pi-love-workbuddy-gateway -d` | 转入后台运行，关掉终端也不会停 |
 | `pi-love-workbuddy-gateway models` | 打印模型清单（带费用标记） |
 | `pi-love-workbuddy-gateway models -pi` | 输出 pi 的 `models.json` |
+| `pi-love-workbuddy-gateway -version` | 打印版本号 |
+
+### 后台运行
+
+```bash
+$ pi-love-workbuddy-gateway -d
+已转入后台，PID 59583
+日志：/Users/你/.config/piloveworkbuddy/gateway.log
+停止：kill 59583
+```
+
+命令立刻就返回了，网关在后台继续干活。关掉终端、断开 SSH 都不影响它。
+
+停止：
+
+```bash
+kill 59583            # PID 就是上面打印的那个
+# 或者
+pkill -f pi-love-workbuddy-gateway
+```
+
+如果启动失败（最常见的是端口 `8788` 已被另一个实例占着），
+命令会**直接把失败报出来**，而不是假装启动成功了：
+
+```
+启动失败：后台进程启动后立即退出（exit status 1）。常见原因是端口已被占用；
+详情见日志：/Users/你/.config/piloveworkbuddy/gateway.log
+```
 
 ### 可选参数
 
@@ -130,6 +159,7 @@ pi --model workbuddy/step-5-preview "帮我看看这个项目"
 | `-at-rest-secret` | 自动获取 | 手动指定解密用的根密钥 |
 | `-promotions` | 见下 | 手动指定促销配置文件 |
 | `-log` | `~/.config/piloveworkbuddy/gateway.log` | 日志路径；显式传空串则只写屏幕 |
+| `-d` | 关 | 转入后台运行 |
 
 ---
 

@@ -215,7 +215,7 @@ func newGateway(t *testing.T, backend *fakeBackend, apiKey string, expiresAt tim
 	if err != nil {
 		t.Fatalf("加载促销配置失败：%v", err)
 	}
-	logger, err := logging.New(filepath.Join(t.TempDir(), "test.log"))
+	logger, err := logging.New(filepath.Join(t.TempDir(), "test.log"), false)
 	if err != nil {
 		t.Fatalf("构造日志器失败：%v", err)
 	}
