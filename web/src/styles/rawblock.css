@@ -10,26 +10,30 @@
   /* 分三层：--ink 是文字，--rule 是结构性粗边框，--line 是细分隔线。
      亮色下 ink 与 rule 同为纯黑（设计系统原本就是这样）；
      暗色下必须分开，原因见下面的 [data-theme="dark"]。 */
-  --paper: #ffffff; /* 底色 */
-  --surface: #f2f2f2; /* 代码块等底纹 */
-  --hover: #f7f7f7; /* 行悬停 */
-  --ink: #000000; /* 正文、标题 */
-  --rule: #000000; /* 粗边框 */
-  --line: #cccccc; /* 细分隔线 */
-  --muted: #4d4d4d; /* 次要文字 */
+  /* 纸与墨，不是白与黑。
+     纯白配纯黑是 21:1——那是印刷品的理论极值，铺满屏幕会发光。
+     工业粗野主义一派的取值：未漂白的文档纸 + 碳墨。
+     这一条在暗色那边早就做了，亮色却一直是纯白，等于同一个原则只应用了一半。 */
+  --paper: #f4f4f0; /* 纸：未漂白的文档纸，不是纯白 */
+  --surface: #e8e8e3; /* 代码块等底纹 */
+  --hover: #ecece6; /* 行悬停 */
+  --ink: #111111; /* 墨：碳墨，不是纯黑 */
+  --rule: #111111; /* 粗边框 */
+  --line: #c9c9c2; /* 细分隔线 */
+  --muted: #55534e; /* 次要文字 */
 
   /* 反向块：黑底白字那种。激活的导航、按下的按钮、付费标记都用它。 */
-  --invert-bg: #000000;
-  --invert-fg: #ffffff;
+  --invert-bg: #111111;
+  --invert-fg: #f4f4f0;
   /* 反白块里的次要文字。单独给一个色，而不是给 --invert-fg 加 opacity——
      第十二节禁止用半透明做弱化（下层会透出来）。 */
   --invert-muted: #b3b3b3;
 
   /* 禁用态：灰底 + 灰字 + 灰边。
      不用 opacity——半透明会让下层内容透出来，深色底上尤其糊。 */
-  --disabled-bg: #f5f5f5;
-  --disabled-fg: #808080;
-  --disabled-rule: #cccccc;
+  --disabled-bg: #e8e8e3;
+  --disabled-fg: #85837c;
+  --disabled-rule: #c9c9c2;
 
   --link: #0000ff;
   --ok: #008000;
@@ -161,25 +165,33 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* 字距规则：**字号越大越紧，越小越松**，一律用 em。
+   用 px 的话字距不随字号缩放，大标题会显得松垮——之前 h1 34px 用的是 +0.5px
+   （正的），方向是反的。两套参考里 Display 用 -0.03 ~ -0.06em，
+   而小号大写标签用 +0.08 ~ +0.14em。 */
 h1,
 h2,
 h3 {
   font-family: var(--font-title);
   font-weight: 400;
-  line-height: 1.1;
-  letter-spacing: 0.5px;
   text-transform: uppercase;
   margin: 0;
 }
 
 h1 {
   font-size: 34px;
+  line-height: 1;
+  letter-spacing: -0.02em;
 }
 h2 {
   font-size: 22px;
+  line-height: 1.15;
+  letter-spacing: -0.015em;
 }
 h3 {
   font-size: 15px;
+  line-height: 1.3;
+  letter-spacing: 0;
 }
 
 a {
@@ -246,6 +258,7 @@ pre {
 .brand {
   font-family: var(--font-title);
   font-size: 17px;
+  letter-spacing: -0.01em;
   text-transform: uppercase;
   padding: 14px 20px;
   display: flex;
@@ -281,7 +294,7 @@ pre {
   font-size: 13px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 0.06em;
   color: var(--ink);
   border: 0;
   padding: 0 22px;
@@ -343,7 +356,7 @@ footer {
   align-items: center;
   font-size: 12px;
   text-transform: uppercase;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.06em;
 }
 
 /* ── 区块与卡片 ─────────────────────────────────────────
@@ -405,7 +418,7 @@ footer {
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 1.2px;
+  letter-spacing: 0.12em;
   display: flex;
   justify-content: space-between;
   gap: 8px;
@@ -467,7 +480,7 @@ thead th {
   text-align: left;
   font-size: 11px;
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 0.12em;
   border-bottom: 3px solid var(--rule);
   padding: 8px 10px;
   white-space: nowrap;
@@ -519,7 +532,7 @@ th.num {
   font-family: var(--font-mono);
   font-size: 10px;
   text-transform: uppercase;
-  letter-spacing: 0.6px;
+  letter-spacing: 0.06em;
   border: 2px solid var(--rule);
   padding: 1px 5px;
   white-space: nowrap;
@@ -555,7 +568,7 @@ button.action {
   font-size: 12px;
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 1px;
+  letter-spacing: 0.08em;
   background: var(--paper);
   color: var(--ink);
   border: 3px solid var(--rule);
