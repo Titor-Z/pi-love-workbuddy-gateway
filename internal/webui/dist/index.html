@@ -1,16 +1,32 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="light">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <!-- 网关每次启动都会把这个占位符换成一次性随机串。
          开发模式下由 vite.config.js 的插件去网关首页抄一份。 -->
     <meta name="plwg-nonce" content="__PLWG_NONCE__" />
-    <meta name="color-scheme" content="light" />
     <title>pi-love-workbuddy-gateway · 控制台</title>
     <link rel="stylesheet" href="/fonts/fonts.css" />
-    <script type="module" crossorigin src="/assets/index-U_M_VG3V.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-CGuBph5l.css">
+    <script>
+      // 在样式表生效前就把主题定下来。
+      // 放到前端代码里做的话，暗色模式下会先闪一下白底再变黑。
+      (function () {
+        var saved = null;
+        try {
+          saved = localStorage.getItem("plwg-theme");
+        } catch (e) {
+          // 隐私模式读不到，按跟随系统处理。
+        }
+        if (saved !== "light" && saved !== "dark") {
+          saved = matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+        }
+        document.documentElement.dataset.theme = saved;
+        document.documentElement.style.colorScheme = saved;
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-GaXNQNE7.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-Dy3078Jc.css">
   </head>
   <body>
     <div id="app"></div>

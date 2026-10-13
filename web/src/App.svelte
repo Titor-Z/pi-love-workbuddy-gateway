@@ -1,5 +1,6 @@
 <script>
   import { api } from "./lib/api.js";
+  import "./lib/theme.svelte.js"; // 引入即应用主题，不必等某个视图加载
   import Overview from "./views/Overview.svelte";
   import Models from "./views/Models.svelte";
   import Settings from "./views/Settings.svelte";

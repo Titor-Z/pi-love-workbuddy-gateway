@@ -1,7 +1,7 @@
 <script>
   import { api } from "../lib/api.js";
   import Chart from "../lib/Chart.svelte";
-  import { stackedBarOptions, lineOptions, colorFor } from "../lib/chartTheme.js";
+  import { stackedBarOptions, lineOptions, colorFor, ink } from "../lib/chartTheme.js";
   import * as fmt from "../lib/format.js";
 
   let usage = $state(null);
@@ -59,7 +59,8 @@
         label: model,
         data: usage.days.map((d) => d.by_model[model] ?? 0),
         backgroundColor: colorFor(index),
-        borderColor: "#000000",
+        // 柱子的描边跟前景色走，暗色下才是白线。
+        borderColor: ink(),
         borderWidth: 2,
         // 无圆角是设计系统的硬要求，Chart.js 默认会圆角。
         borderRadius: 0,
@@ -76,10 +77,10 @@
       {
         label: "请求数",
         data: usage?.days?.map((d) => d.requests) ?? [],
-        borderColor: "#000000",
-        backgroundColor: "#000000",
+        borderColor: ink(),
+        backgroundColor: ink(),
         fill: false,
-        pointBackgroundColor: "#000000",
+        pointBackgroundColor: ink(),
       },
     ],
   });
@@ -145,16 +146,16 @@
           <div class="num" style="font-size:28px;margin-top:8px">
             {fmt.credit(pack.remain)}<small style="font-size:15px"> / {fmt.credit(pack.size)}</small>
           </div>
-          <div class="sub num" style="font-size:11px;color:#444">
+          <div class="sub num" style="font-size:11px;color:var(--muted)">
             本轮已用 {fmt.credit(pack.use)}
           </div>
-          <div class="sub num" style="font-size:11px;color:#444">
+          <div class="sub num" style="font-size:11px;color:var(--muted)">
             周期结束 {fmt.date(pack.cycle_end)} · 到期 {fmt.date(pack.expire)}
           </div>
         </div>
       {/each}
     </div>
-    <p class="hint" style="font-family:var(--font-mono);font-size:11px;color:#444;margin-top:12px">
+    <p class="hint" style="font-family:var(--font-mono);font-size:11px;color:var(--muted);margin-top:12px">
       读取于 {fmt.time(billing.fetched_at)} · {billing.settle_hint}
     </p>
   {/if}

@@ -66,6 +66,16 @@ export function shortDate(value) {
   return value.slice(5);
 }
 
+// compactDate 在年份与今年相同时把 2026-10-31 缩成 10-31。
+// 费用列要塞在一行里，年份几乎总是今年，占地方又没用；
+// 真跨年了还是老老实实写全——省掉会让「01-01」读起来是错的。
+export function compactDate(value) {
+  if (!value) return "";
+  const text = String(value);
+  const year = new Date().getFullYear();
+  return text.startsWith(`${year}-`) ? text.slice(5) : text;
+}
+
 // dayOnly 把 2026-10-14 读成 14。
 // 窄容器里的折线图用这个：14 个「10-14」放不下会被 Chart.js 抽稀，
 // 而抽稀会把最后一天吞掉，图上就出现了「线跳在 10-13 上」的错觉。

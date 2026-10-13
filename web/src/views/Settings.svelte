@@ -1,5 +1,6 @@
 <script>
   import { api } from "../lib/api.js";
+  import { theme, THEMES } from "../lib/theme.svelte.js";
 
   let text = $state("{}");
   let path = $state("");
@@ -79,6 +80,33 @@
 {#if notice}
   <div class="notice ok">{notice}</div>
 {/if}
+
+<section class="section">
+  <header>
+    <h2>外观</h2>
+    <span class="hint">保存在本机浏览器里，不上传</span>
+  </header>
+
+  <div class="card">
+    <div class="bar">
+      {#each THEMES as item (item.id)}
+        <button
+          class="action"
+          aria-pressed={theme.preference === item.id}
+          onclick={() => theme.set(item.id)}
+        >
+          {item.label}
+        </button>
+      {/each}
+    </div>
+    <p style="font-size:12px;margin:10px 0 0;color:var(--muted)">
+      当前显示：{theme.resolved === "dark" ? "暗色" : "亮色"}。
+      {#if theme.preference === "system"}
+        跟随系统时会随系统设置自动切换。
+      {/if}
+    </p>
+  </div>
+</section>
 
 <section class="section">
   <header>

@@ -91,7 +91,7 @@
       </button>
       <button class="action" onclick={load} disabled={loading}>刷新</button>
     </div>
-    <p style="font-size:12px;margin:10px 0 0;color:#444">
+    <p style="font-size:12px;margin:10px 0 0;color:var(--muted)">
       配置指向 <code>http://127.0.0.1:8788/v1</code>。模型名里带着费用标记，
       pi 的模型选择器会原样显示，一眼能看出哪个免费。
     </p>
@@ -102,12 +102,12 @@
   {/if}
 
   <div class="card tight">
-    <div style="padding:12px;border-bottom:3px solid var(--black)">
+    <div style="padding:12px;border-bottom:3px solid var(--rule)">
       <input
         type="search"
         bind:value={filter}
         placeholder="过滤模型名…"
-        style="width:100%;font-family:var(--font-mono);font-size:13px;border:3px solid var(--black);padding:8px 10px;background:var(--white);color:var(--black)"
+        style="width:100%;font-family:var(--font-mono);font-size:13px;border:3px solid var(--rule);padding:8px 10px;background:var(--paper);color:var(--ink)"
       />
     </div>
 
@@ -132,27 +132,26 @@
               <td>
                 <div class="num" style="font-size:13px">{model.id}</div>
                 {#if model.name.toLowerCase() !== model.id.toLowerCase()}
-                  <div style="font-size:11px;color:#666">{model.name}</div>
+                  <div style="font-size:11px;color:var(--muted)">{model.name}</div>
                 {/if}
               </td>
+              <!-- 费用标记排成一行：多行会让整张表的高度被最啰嗦的那一行决定。 -->
               <td>
-                {#if model.free}
-                  <span class="tag free">免费</span>
-                {:else if model.credits}
-                  <span class="tag paid">{model.credits}</span>
-                {:else}
-                  <span style="color:#666">—</span>
-                {/if}
-                {#if model.badge}
-                  <div style="margin-top:4px">
+                <div class="fee">
+                  {#if model.free}
+                    <span class="tag free">免费</span>
+                  {:else if model.credits}
+                    <span class="tag paid">{model.credits}</span>
+                  {:else}
+                    <span style="color:var(--muted)">—</span>
+                  {/if}
+                  {#if model.badge}
                     <span class="tag promo">{model.badge}</span>
-                  </div>
-                {/if}
-                {#if model.free_until}
-                  <div class="num" style="font-size:10px;color:#444;margin-top:2px">
-                    至 {fmt.date(model.free_until)}
-                  </div>
-                {/if}
+                  {/if}
+                  {#if model.free_until}
+                    <span class="num fee-until">至 {fmt.compactDate(model.free_until)}</span>
+                  {/if}
+                </div>
               </td>
               <td>
                 <div style="display:flex;gap:4px;flex-wrap:wrap">
@@ -169,3 +168,18 @@
     {/if}
   </div>
 </section>
+
+<style>
+  /* 费用列不分行。窄屏时允许横向滚动，也不能把标签拆开——
+     「限时免费」拆成两行读起来像两个词。 */
+  .fee {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+  }
+  .fee-until {
+    font-size: 11px;
+    color: var(--muted);
+  }
+</style>

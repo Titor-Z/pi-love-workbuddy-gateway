@@ -1,11 +1,28 @@
 /* RawBlock 设计系统。
    反设计／粗野主义：无圆角、无阴影、厚边框、纯黑白。
-   色板只有 6 个：黑白，加上仅限链接的蓝与三个状态色。
-   间距用 8px 基数，但刻意不规则——不要把这个文件「整理」成整齐的网格。 */
+   色板只有 6 色：黑白，加上仅限链接的蓝与三个状态色。
+   间距用 8px 基数，但刻意不规则——不要把这个文件「整理」成整齐的网格。
+
+   变量名用语义而不是颜色：暗色模式下「--black」会变成白色，
+   那种名字会把人绕进去。--ink 是前景与粗边框，--paper 是底色。 */
 
 :root {
-  --black: #000000;
-  --white: #ffffff;
+  /* 分三层：--ink 是文字，--rule 是结构性粗边框，--line 是细分隔线。
+     亮色下 ink 与 rule 同为纯黑（设计系统原本就是这样）；
+     暗色下必须分开，原因见下面的 [data-theme="dark"]。 */
+  --paper: #ffffff; /* 底色 */
+  --surface: #f2f2f2; /* 代码块等底纹 */
+  --hover: #f7f7f7; /* 行悬停 */
+  --ink: #000000; /* 正文、标题 */
+  --rule: #000000; /* 粗边框 */
+  --line: #cccccc; /* 细分隔线 */
+  --muted: #4d4d4d; /* 次要文字 */
+  --faint: #808080; /* 更次的文字、虚线框 */
+
+  /* 反向块：黑底白字那种。激活的导航、按下的按钮、付费标记都用它。 */
+  --invert-bg: #000000;
+  --invert-fg: #ffffff;
+
   --link: #0000ff;
   --ok: #008000;
   --warn: #ffa500;
@@ -30,10 +47,92 @@
   --font-mono: "Space Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 }
 
+/* 暗色不是把亮色反过来。
+   直接反转会得到纯白配纯黑，对比度 21:1——这是印刷品的对比，
+   屏幕上的大面积亮白会发光、发糊，看久了眼睛累。
+   按 Apple 的做法改三处：
+
+   1. 底色抬离纯黑（#141416）。用抬高的灰而不是纯黑来表达「层」，
+      下层是页面、上层是卡片，靠明度差而不是靠更亮的描边。
+   2. 文字不用纯白，收到 #e4e4e7。14:1 仍然远超可读性要求，
+      但不再是「白得刺眼」。
+   3. 粗边框单独一档（--rule #6b6b72，约 3.5:1）。亮色下边框与文字
+      同为纯黑没问题，因为黑色在白底上是「收」的；白在黑底上是「放」的，
+      同样的 5px 白线会比黑线厚重得多。3.5:1 够看清结构，又不喧宾夺主。
+
+   「反向块」也跟着变：暗色下不再用纯白填充（那是整块最亮的东西），
+   改用一档浅灰。 */
+[data-theme="dark"] {
+  --paper: #141416;
+  --surface: #1c1c1f;
+  --hover: #232327;
+  --ink: #e4e4e7;
+  --rule: #6b6b72;
+  --line: #3a3a3f;
+  --muted: #9a9aa1;
+  --faint: #5c5c63;
+
+  --invert-bg: #3f3f45;
+  --invert-fg: #e4e4e7;
+
+  /* 只调亮度与饱和度，不动色相：绿还是成功、红还是失败。
+     纯蓝 #0000FF 在黑底上几乎看不见，纯红 #FF0000 对比度只有 4.0，
+     纯绿 #008000 只有 3.0——设计系统那三个色是按白底挑的。 */
+  --link: #7aa2ff;
+  --ok: #35c46a;
+  --warn: #ffb340;
+  --error: #ff6b6b;
+
+  --chart-1: #d5d5da; /* 亮色下是纯黑，暗色下收到浅灰而不是纯白 */
+  --chart-2: #7aa2ff;
+  --chart-3: #c77dff;
+  --chart-4: #ff7ae0;
+  --chart-5: #2ec4c4;
+  --chart-6: #e08a4a;
+  --chart-7: #9d7bff;
+  --chart-8: #c4c44a;
+}
+
+html {
+  /* overscroll 露出来的区域也得是同一个底色，否则下拉时闪一条白边。 */
+  background: var(--paper);
+}
+
 *,
 *::before,
 *::after {
   box-sizing: border-box;
+}
+
+/* 换主题时临时挂上（见 theme.svelte.js）：让颜色淡过去，而不是硬切。
+   只过渡颜色相关的属性，而且只在这一瞬间生效——
+   常驻过渡会把悬停、按下这些需要立刻响应的反馈也拖慢。 */
+.theme-fading,
+.theme-fading *,
+.theme-fading *::before,
+.theme-fading *::after {
+  transition: background-color 260ms ease, color 260ms ease, border-color 260ms ease;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .theme-fading,
+  .theme-fading *,
+  .theme-fading *::before,
+  .theme-fading *::after {
+    transition: none;
+  }
+}
+
+/* 有人把系统的「增强对比度」打开了，就说明默认对比对ta不够。
+   这时候把边框提回正文色、细分隔线也提一档——
+   上面为了柔和而做的让步，在这个偏好下应该是让位的。 */
+@media (prefers-contrast: more) {
+  :root,
+  [data-theme="dark"] {
+    --rule: var(--ink);
+    --line: var(--muted);
+    --faint: var(--muted);
+  }
 }
 
 html,
@@ -43,8 +142,8 @@ body {
 }
 
 body {
-  background: var(--white);
-  color: var(--black);
+  background: var(--paper);
+  color: var(--ink);
   font-family: var(--font-body);
   font-size: 15px;
   line-height: 1.6;
@@ -84,8 +183,8 @@ pre,
 }
 
 pre {
-  background: #f2f2f2;
-  border: 3px solid var(--black);
+  background: var(--surface);
+  border: 3px solid var(--rule);
   padding: 12px;
   overflow-x: auto;
   font-size: 13px;
@@ -101,11 +200,11 @@ pre {
 }
 
 .topbar {
-  border-bottom: 5px solid var(--black);
+  border-bottom: 5px solid var(--rule);
   display: flex;
   align-items: stretch;
   flex-wrap: wrap;
-  background: var(--white);
+  background: var(--paper);
   position: sticky;
   top: 0;
   z-index: 10;
@@ -116,7 +215,7 @@ pre {
   font-size: 17px;
   text-transform: uppercase;
   padding: 14px 20px;
-  border-right: 5px solid var(--black);
+  border-right: 5px solid var(--rule);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -125,7 +224,7 @@ pre {
 .brand .ver {
   font-family: var(--font-mono);
   font-size: 11px;
-  border: 2px solid var(--black);
+  border: 2px solid var(--rule);
   padding: 1px 5px;
   text-transform: none;
   letter-spacing: 0;
@@ -143,21 +242,21 @@ pre {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.8px;
-  background: var(--white);
-  color: var(--black);
+  background: var(--paper);
+  color: var(--ink);
   border: 0;
-  border-right: 3px solid var(--black);
+  border-right: 3px solid var(--rule);
   padding: 0 22px;
   cursor: pointer;
 }
 
 .nav button:hover {
-  background: #f2f2f2;
+  background: var(--hover);
 }
 
 .nav button[aria-current="page"] {
-  background: var(--black);
-  color: var(--white);
+  background: var(--invert-bg);
+  color: var(--invert-fg);
 }
 
 .topbar .spacer {
@@ -171,14 +270,14 @@ pre {
   font-family: var(--font-mono);
   font-size: 12px;
   text-transform: uppercase;
-  border-left: 3px solid var(--black);
+  border-left: 3px solid var(--rule);
   gap: 8px;
 }
 
 .dot {
   width: 10px;
   height: 10px;
-  border: 2px solid var(--black);
+  border: 2px solid var(--rule);
   display: inline-block;
 }
 .dot.on {
@@ -197,7 +296,7 @@ main {
 }
 
 footer {
-  border-top: 5px solid var(--black);
+  border-top: 5px solid var(--rule);
   padding: 16px 32px;
   display: flex;
   flex-wrap: wrap;
@@ -219,7 +318,7 @@ footer {
   align-items: baseline;
   justify-content: space-between;
   gap: 16px;
-  border-bottom: 3px solid var(--black);
+  border-bottom: 3px solid var(--rule);
   padding-bottom: 8px;
   margin-bottom: 20px;
   flex-wrap: wrap;
@@ -228,7 +327,7 @@ footer {
 .section > header .hint {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: #444;
+  color: var(--muted);
   text-transform: none;
   letter-spacing: 0;
 }
@@ -247,9 +346,9 @@ footer {
 }
 
 .card {
-  border: 4px solid var(--black);
+  border: 4px solid var(--rule);
   padding: 16px;
-  background: var(--white);
+  background: var(--paper);
 }
 
 .card.tight {
@@ -257,7 +356,7 @@ footer {
 }
 
 .stat {
-  border: 4px solid var(--black);
+  border: 4px solid var(--rule);
   padding: 14px 16px 16px;
 }
 
@@ -287,7 +386,7 @@ footer {
 .stat .sub {
   font-family: var(--font-mono);
   font-size: 11px;
-  color: #444;
+  color: var(--muted);
   margin-top: 4px;
 }
 
@@ -303,24 +402,38 @@ table {
   font-size: 13px;
 }
 
-th {
+/* 表头：只有 <thead> 里的那一行才用粗横线。
+   状态页把 <th> 当行标签用（左列标签、右列值），
+   那样每个单元格各画各的线，一行里左边 3px、右边 1px，看着就断了。 */
+thead th {
   text-align: left;
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 1px;
-  border-bottom: 3px solid var(--black);
+  border-bottom: 3px solid var(--rule);
   padding: 8px 10px;
   white-space: nowrap;
 }
 
-td {
-  border-bottom: 1px solid #ccc;
+td,
+tbody th {
+  border-bottom: 1px solid var(--line);
   padding: 8px 10px;
   vertical-align: top;
 }
 
+/* 行标签：与右边的值同一行，线型必须一致。 */
+tbody th {
+  text-align: left;
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: none;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
 tbody tr:hover {
-  background: #f7f7f7;
+  background: var(--hover);
 }
 
 td.num,
@@ -334,8 +447,8 @@ th.num {
   text-align: center;
   font-family: var(--font-mono);
   font-size: 12px;
-  color: #444;
-  border: 3px dashed #999;
+  color: var(--muted);
+  border: 3px dashed var(--faint);
 }
 
 /* ── 标记 ─────────────────────────────────────────────── */
@@ -346,30 +459,32 @@ th.num {
   font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.6px;
-  border: 2px solid var(--black);
+  border: 2px solid var(--rule);
   padding: 1px 5px;
   white-space: nowrap;
 }
 
 .tag.free {
   background: var(--ok);
-  color: var(--white);
+  color: var(--paper);
   border-color: var(--ok);
 }
 
 .tag.promo {
   background: var(--warn);
+  color: #000000; /* 橙色底上必须是黑字，暗色模式下也一样 */
+  border-color: var(--warn);
 }
 
 .tag.blocked {
   background: var(--error);
-  color: var(--white);
+  color: var(--paper);
   border-color: var(--error);
 }
 
 .tag.paid {
-  background: var(--black);
-  color: var(--white);
+  background: var(--invert-bg);
+  color: var(--invert-fg);
 }
 
 /* ── 控件 ─────────────────────────────────────────────── */
@@ -380,21 +495,21 @@ button.action {
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 1px;
-  background: var(--white);
-  color: var(--black);
-  border: 3px solid var(--black);
+  background: var(--paper);
+  color: var(--ink);
+  border: 3px solid var(--rule);
   padding: 8px 16px;
   cursor: pointer;
 }
 
 button.action:hover:not(:disabled) {
-  background: var(--black);
-  color: var(--white);
+  background: var(--invert-bg);
+  color: var(--invert-fg);
 }
 
 button.action[aria-pressed="true"] {
-  background: var(--black);
-  color: var(--white);
+  background: var(--invert-bg);
+  color: var(--invert-fg);
 }
 
 button.action:disabled {
@@ -409,7 +524,7 @@ button.action.danger {
 
 button.action.danger:hover:not(:disabled) {
   background: var(--error);
-  color: var(--white);
+  color: var(--paper);
 }
 
 textarea {
@@ -417,10 +532,10 @@ textarea {
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.5;
-  border: 4px solid var(--black);
+  border: 4px solid var(--rule);
   padding: 12px;
-  background: var(--white);
-  color: var(--black);
+  background: var(--paper);
+  color: var(--ink);
   resize: vertical;
 }
 
@@ -439,7 +554,7 @@ textarea:focus {
 /* ── 提示条 ───────────────────────────────────────────── */
 
 .notice {
-  border: 3px solid var(--black);
+  border: 3px solid var(--rule);
   border-left-width: 10px;
   padding: 10px 14px;
   font-size: 13px;
@@ -465,7 +580,7 @@ textarea:focus {
 /* ── 图表 ─────────────────────────────────────────────── */
 
 .chart-box {
-  border: 4px solid var(--black);
+  border: 4px solid var(--rule);
   padding: 12px;
   height: 320px;
   position: relative;
@@ -493,7 +608,7 @@ textarea:focus {
 .legend i {
   width: 14px;
   height: 14px;
-  border: 2px solid var(--black);
+  border: 2px solid var(--rule);
   display: inline-block;
 }
 
@@ -502,7 +617,7 @@ textarea:focus {
 .log {
   font-family: var(--font-mono);
   font-size: 12px;
-  border: 4px solid var(--black);
+  border: 4px solid var(--rule);
   max-height: 620px;
   overflow: auto;
 }
@@ -512,15 +627,15 @@ textarea:focus {
   grid-template-columns: 150px 62px 1fr;
   gap: 10px;
   padding: 6px 10px;
-  border-bottom: 1px solid #ddd;
+  border-bottom: 1px solid var(--line);
 }
 
 .log-row:hover {
-  background: #f7f7f7;
+  background: var(--hover);
 }
 
 .log-row .t {
-  color: #555;
+  color: var(--muted);
 }
 
 .log-row.blocked {
@@ -531,7 +646,6 @@ textarea:focus {
   font-weight: 700;
   text-transform: uppercase;
   font-size: 10px;
-  padding-top: 2px;
 }
 
 @media (max-width: 720px) {
@@ -540,7 +654,7 @@ textarea:focus {
   }
   .topbar .health {
     border-left: 0;
-    border-top: 3px solid var(--black);
+    border-top: 3px solid var(--rule);
     width: 100%;
     padding: 8px 16px;
   }
