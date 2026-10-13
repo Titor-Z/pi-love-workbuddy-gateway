@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -31,19 +32,25 @@ type Manager struct {
 	cipher *atrest.Cipher // 字段级加解密器
 	client *http.Client   // 刷新令牌用的 HTTP 客户端
 	report Reporter       // 刷新事件汇报；为 nil 时静默
+	base   string         // 后端根地址，用于刷新令牌
 
 	mu    sync.Mutex // 串行化读取与刷新，避免并发重复刷新
 	doc   map[string]any
 	mtime time.Time
 }
 
-// NewManager 构造一个凭据管理器。report 允许为 nil。
-func NewManager(path string, cipher *atrest.Cipher, report Reporter) *Manager {
+// NewManager 构造一个凭据管理器。report 允许为 nil；
+// baseURL 留空时指向官方后端，传入自定义地址可以接管刷新请求。
+func NewManager(path string, cipher *atrest.Cipher, report Reporter, baseURL string) *Manager {
+	if baseURL == "" {
+		baseURL = wbapi.BaseURL
+	}
 	return &Manager{
 		path:   path,
 		cipher: cipher,
 		client: &http.Client{Timeout: refreshTimeout},
 		report: report,
+		base:   strings.TrimSuffix(baseURL, "/"),
 	}
 }
 
@@ -139,7 +146,7 @@ func (m *Manager) refreshLocked(doc map[string]any) error {
 		Msg  string         `json:"msg"`
 		Data map[string]any `json:"data"`
 	}
-	if err := m.postJSON(wbapi.BaseURL+wbapi.RefreshPath, headers, &payload); err != nil {
+	if err := m.postJSON(m.base+wbapi.RefreshPath, headers, &payload); err != nil {
 		return err
 	}
 	if payload.Code != 0 || payload.Data == nil {

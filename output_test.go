@@ -102,6 +102,39 @@ func TestWritePiModels(t *testing.T) {
 	}
 }
 
+// TestHasVersionFlag 版本号开关的两种写法都要认。
+func TestHasVersionFlag(t *testing.T) {
+	cases := []struct {
+		args []string
+		want bool
+	}{
+		{[]string{}, false},
+		{[]string{"models"}, false},
+		{[]string{"-version"}, true},
+		{[]string{"--version"}, true},
+		{[]string{"serve", "--version"}, true},
+		{[]string{"-versioning"}, false},
+	}
+	for _, testCase := range cases {
+		if got := hasVersionFlag(testCase.args); got != testCase.want {
+			t.Errorf("hasVersionFlag(%v) = %v，期望 %v", testCase.args, got, testCase.want)
+		}
+	}
+}
+
+// TestResolvePromotionsPath 显式路径优先，否则回退到默认位置。
+func TestResolvePromotionsPath(t *testing.T) {
+	explicit := &config.Config{Promotions: "/tmp/custom.json"}
+	if got := resolvePromotionsPath(explicit); got != "/tmp/custom.json" {
+		t.Errorf("got %q，期望采用显式路径", got)
+	}
+
+	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg-root")
+	if got, want := resolvePromotionsPath(&config.Config{}), "/tmp/xdg-root/piloveworkbuddy/promotions.json"; got != want {
+		t.Errorf("got %q，期望 %q", got, want)
+	}
+}
+
 // TestWriteTable 表格至少要包含每个模型，且不报错。
 func TestWriteTable(t *testing.T) {
 	entries := catalog.Build([]upstream.ModelInfo{

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
@@ -33,14 +34,20 @@ type Client struct {
 	streamHTTP *http.Client
 	metaHTTP   *http.Client
 	cred       *credential.Manager
+	baseURL    string // 后端根地址，留空表示用官方地址
 }
 
-// NewClient 构造后端客户端。
-func NewClient(cred *credential.Manager) *Client {
+// NewClient 构造后端客户端。baseURL 留空时指向官方后端；
+// 传入自定义地址可以让测试或自建代理接管。
+func NewClient(cred *credential.Manager, baseURL string) *Client {
+	if baseURL == "" {
+		baseURL = wbapi.BaseURL
+	}
 	return &Client{
 		streamHTTP: &http.Client{},
 		metaHTTP:   &http.Client{Timeout: metaTimeout},
 		cred:       cred,
+		baseURL:    strings.TrimSuffix(baseURL, "/"),
 	}
 }
 
@@ -52,7 +59,7 @@ func (c *Client) ChatStream(ctx context.Context, body []byte) (*http.Response, e
 		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		wbapi.BaseURL+wbapi.ChatPath, bytes.NewReader(body))
+		c.baseURL+wbapi.ChatPath, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("构造补全请求失败：%w", err)
 	}
@@ -82,7 +89,7 @@ func (c *Client) Models(ctx context.Context) ([]ModelInfo, error) {
 		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		wbapi.BaseURL+wbapi.ModelsPath, nil)
+		c.baseURL+wbapi.ModelsPath, nil)
 	if err != nil {
 		return nil, fmt.Errorf("构造模型目录请求失败：%w", err)
 	}

@@ -86,7 +86,7 @@ func runServe(args []string) error {
 		return err
 	}
 
-	server := gateway.NewServer(cfg, cred, upstream.NewClient(cred), promotions, logger)
+	server := gateway.NewServer(cfg, cred, upstream.NewClient(cred, ""), promotions, logger)
 	httpServer := &http.Server{
 		Addr:              cfg.ListenAddr,
 		Handler:           server.Handler(),
@@ -140,7 +140,7 @@ func runModels(args []string) error {
 	if err != nil {
 		return err
 	}
-	models, err := upstream.NewClient(cred).Models(context.Background())
+	models, err := upstream.NewClient(cred, "").Models(context.Background())
 	if err != nil {
 		return err
 	}
@@ -161,7 +161,7 @@ func buildCredential(cfg *config.Config, report credential.Reporter) (*credentia
 	if err != nil {
 		return nil, nil, err
 	}
-	return credential.NewManager(authFile, cipher, report), cipher, nil
+	return credential.NewManager(authFile, cipher, report, ""), cipher, nil
 }
 
 // resolvePromotionsPath 给出促销配置文件的实际路径。
