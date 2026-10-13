@@ -1,4 +1,5 @@
 <script>
+  import Skeleton from "../lib/Skeleton.svelte";
   import { api } from "../lib/api.js";
   import * as fmt from "../lib/format.js";
 
@@ -49,7 +50,7 @@
   </header>
 
   {#if !status}
-    <div class="empty">读取中…</div>
+    <Skeleton rows={5} shape="table" cols={2} />
   {:else}
     <div class="grid stats" style="margin-bottom:20px">
       <div class="stat">

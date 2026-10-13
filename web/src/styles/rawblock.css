@@ -31,8 +31,13 @@
 
   /* 禁用态：灰底 + 灰字 + 灰边。
      不用 opacity——半透明会让下层内容透出来，深色底上尤其糊。 */
+  /* z-index 只用于系统性的层：粘性顶栏、遮罩、对话框。
+     禁止出现 9999 这类「我先压住它」的数字——那种值一旦有两个就没人说得清谁在上面。 */
+  --z-sticky: 10;
+  --z-scrim: 100;
+
   --disabled-bg: #e8e8e3;
-  --disabled-fg: #85837c;
+  --disabled-fg: #6b6960;
   --disabled-rule: #c9c9c2;
 
   --link: #0000ff;
@@ -75,21 +80,26 @@
    「反向块」也跟着变：暗色下不再用纯白填充（那是整块最亮的东西），
    改用一档浅灰。 */
 [data-theme="dark"] {
-  --paper: #141416;
-  --surface: #1c1c1f;
-  --hover: #232327;
-  --ink: #e4e4e7;
-  --rule: #6b6b72;
-  --line: #3a3a3f;
-  --muted: #9a9aa1;
+  /* 冷暖必须与亮色同族。
+     亮色那边是暖灰（#F4F4F0，蓝分量比红绿低 4），原先暗色却是冷灰
+     （#141416，蓝分量**高** 2）——切主题时灰族会整族翻面，
+     观感上像换了个站点。这里把暗色也扭回暖侧：
+     保持「红≈绿 > 蓝」的关系，只是把明度压下来。 */
+  --paper: #141410;
+  --surface: #1c1c18;
+  --hover: #242420;
+  --ink: #e6e5df;
+  --rule: #74736c;
+  --line: #3d3c36;
+  --muted: #a3a29a;
 
-  --invert-bg: #3f3f45;
-  --invert-fg: #e4e4e7;
-  --invert-muted: #b8b8bf;
+  --invert-bg: #42413b;
+  --invert-fg: #e6e5df;
+  --invert-muted: #c0bfb6;
 
-  --disabled-bg: #1f1f22;
-  --disabled-fg: #6b6b72;
-  --disabled-rule: #3f3f45;
+  --disabled-bg: #22221d;
+  --disabled-fg: #84837b;
+  --disabled-rule: #42413b;
 
   /* 只调亮度与饱和度，不动色相：绿还是成功、红还是失败。
      纯蓝 #0000FF 在黑底上几乎看不见，纯红 #FF0000 对比度只有 4.0，
@@ -99,7 +109,7 @@
   --warn: #ffb340;
   --error: #ff6b6b;
 
-  --chart-1: #d5d5da; /* 亮色下是纯黑，暗色下收到浅灰而不是纯白 */
+  --chart-1: #d8d7d1; /* 亮色下是纯黑，暗色下收到浅灰而不是纯白 */
   --chart-2: #7aa2ff;
   --chart-3: #c77dff;
   --chart-4: #ff7ae0;
@@ -136,6 +146,13 @@ html {
   .theme-fading *::before,
   .theme-fading *::after {
     transition: none;
+  }
+
+  /* 平滑滚动也是动效。分页回顶那种长距离滑动对前庭敏感的人是实打实的不适，
+     这个偏好下直接跳过去。注意是「去掉位移」，颜色渐变照旧——
+     规则原文是 gentler, not zero。 */
+  html {
+    scroll-behavior: auto;
   }
 }
 
@@ -183,6 +200,17 @@ h3 {
   font-weight: 400;
   text-transform: uppercase;
   margin: 0;
+  /* 标题求「平衡」：不让最后一个词孤零零掉到下一行。
+     正文求「好看」：允许浏览器为了避免孤字而稍微调整断行。 */
+  text-wrap: balance;
+}
+
+p,
+li,
+td,
+.notice,
+.hint {
+  text-wrap: pretty;
 }
 
 h1 {
@@ -225,6 +253,8 @@ pre {
 
 .shell {
   min-height: 100vh;
+  min-height: 100dvh; /* iOS Safari 上 100vh 会把地址栏算进去，页面会跳 */
+  scroll-behavior: smooth;
   display: flex;
   flex-direction: column;
 }
@@ -239,7 +269,7 @@ pre {
   flex-wrap: wrap;
   position: sticky;
   top: 0;
-  z-index: 10;
+  z-index: var(--z-sticky);
 
   /* 第一行是不支持 color-mix 时的兜底：先用实色，能算再换成半透明。 */
   background: var(--paper);
@@ -545,10 +575,14 @@ thead th {
   white-space: nowrap;
 }
 
+/* 行与行之间不画线。
+   每条底下垫一根细线，是「规格表」最偷懒的默认做法——而且它违反本设计系统
+   自己的规则：分隔优先用间距与填充，线只用在「区域类型」变化处，
+   不用在同类实例之间。行与行是同类实例。
+   只有表头那一条粗线在划分「类型」：标题 vs 数据。 */
 td,
 tbody th {
-  border-bottom: 1px solid var(--line);
-  padding: 8px 10px;
+  padding: 10px;
   vertical-align: top;
 }
 
@@ -711,6 +745,49 @@ textarea {
   flex-wrap: wrap;
 }
 
+/* ── 只给读屏 ─────────────────────────────────────────── */
+
+/* 视觉上不可见，但读屏软件读得到。
+   裁成 1px 而不是 display:none —— 后者会把它从无障碍树里摘掉。
+   骨架屏上的「读取中」就靠它：屏幕上不该有这四个字（骨架条已经在说这件事了），
+   但读屏用户需要听到。 */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* ── 跳过导航 ─────────────────────────────────────────── */
+
+/* 键盘用户按 Tab 的第一下应该能直接跳到正文，而不是把顶栏那 7 个链接
+   一个一个走完。这个链接平时在屏幕外，拿到焦点才滑进来。
+   用 left 挪到屏幕外，不能用 display:none —— 后者根本收不到焦点。 */
+.skip {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: var(--z-scrim);
+  padding: 10px 16px;
+  background: var(--invert-bg);
+  color: var(--invert-fg);
+  font-size: 13px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  text-decoration: none;
+  border: 3px solid var(--rule);
+}
+
+.skip:focus {
+  left: 0;
+}
+
 /* ── 提示条 ───────────────────────────────────────────── */
 
 .notice {
@@ -720,6 +797,9 @@ textarea {
   padding: 10px 14px;
   font-size: 13px;
   margin-bottom: 16px;
+  /* 正文限宽。整行铺满 1200px 的段落，眼睛回行时找不到下一行的开头——
+     一行超过约 65 个字符就该收窄，这是排印上公认的舒适区间上限。 */
+  max-width: 68ch;
 }
 
 .notice.warn {
@@ -799,6 +879,10 @@ textarea {
   color: var(--muted);
 }
 
+/* 稠密列表是上面那条「不画行线」的例外，而且是唯一的例外。
+   一页 50 行、每行横跨整屏的三列，没有线就找不到自己读到哪了。
+   阈值写死：**超过约 20 行才画行线**，4~10 行的表一律不画，
+   靠行高和数字对齐来分。 */
 .log-row {
   display: grid;
   grid-template-columns: 150px 62px 1fr;

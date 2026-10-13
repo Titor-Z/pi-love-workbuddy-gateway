@@ -1,4 +1,5 @@
 <script>
+  import Skeleton from "../lib/Skeleton.svelte";
   import { api, downloadPiConfig, fetchPiConfigText } from "../lib/api.js";
   import * as fmt from "../lib/format.js";
 
@@ -112,7 +113,7 @@
     </div>
 
     {#if loading}
-      <div class="empty">读取中…</div>
+      <Skeleton rows={5} shape="table" cols={3} />
     {:else if visible.length === 0}
       <div class="empty">没有匹配的模型。</div>
     {:else}

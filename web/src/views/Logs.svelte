@@ -1,4 +1,5 @@
 <script>
+  import Skeleton from "../lib/Skeleton.svelte";
   import { api } from "../lib/api.js";
   import * as fmt from "../lib/format.js";
 
@@ -141,7 +142,7 @@
     </div>
 
     {#if loading && chats.length === 0}
-      <div class="empty">读取中…</div>
+      <Skeleton rows={5} />
     {:else if pagedChats.length === 0}
       <div class="empty">没有符合条件的请求。</div>
     {:else}
@@ -198,7 +199,7 @@
     </div>
 
     {#if loading && events.length === 0}
-      <div class="empty">读取中…</div>
+      <Skeleton rows={5} />
     {:else if visible.length === 0}
       <div class="empty">没有符合条件的事件。</div>
     {:else}

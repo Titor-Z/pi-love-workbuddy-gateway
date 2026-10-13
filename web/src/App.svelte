@@ -93,6 +93,11 @@
 </script>
 
 <div class="shell">
+  <!-- 键盘用户的跳转链接。Tab 第一下就能跳过整个导航。
+       平时藏起来，拿到焦点才出现——放在屏幕外而不是 display:none，
+       因为 display:none 的元素根本收不到焦点。 -->
+  <a class="skip" href="#main">跳到正文</a>
+
   <header class="topbar">
     <div class="brand">
       WorkBuddy
@@ -118,7 +123,7 @@
     </div>
   </header>
 
-  <main>
+  <main id="main" tabindex="-1">
     {#if failure}
       <div class="notice error">{failure}</div>
     {/if}

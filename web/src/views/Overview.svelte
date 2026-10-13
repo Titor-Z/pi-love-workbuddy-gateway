@@ -1,4 +1,5 @@
 <script>
+  import Skeleton from "../lib/Skeleton.svelte";
   import { api } from "../lib/api.js";
   import Chart from "../lib/Chart.svelte";
   import { stackedBarOptions, lineOptions, colorFor, ink } from "../lib/chartTheme.js";
@@ -127,7 +128,7 @@
   </header>
 
   {#if !billing}
-    <div class="empty">读取中…</div>
+    <Skeleton rows={5} shape="table" cols={6} />
   {:else}
     <!-- 这里是表格，不是卡片。
          四个长得一模一样的卡片格是典型的「AI 味」（impeccable-design-polish 的清单里
@@ -186,7 +187,7 @@
   </header>
 
   {#if loading && !usage}
-    <div class="empty">读取中…</div>
+    <Skeleton shape="block" />
   {:else if !usage || usage.models.length === 0}
     <div class="empty">还没有记录。通过网关发一次请求就会出现在这里。</div>
   {:else}
