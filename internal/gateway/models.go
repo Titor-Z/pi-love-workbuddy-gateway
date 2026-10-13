@@ -22,7 +22,7 @@ type modelObject struct {
 type modelBilling struct {
 	Free      bool   `json:"free"`                 // 是否免费
 	Credits   string `json:"credits,omitempty"`    // 计费倍率，如 "0.29x"
-	Badge     string `json:"badge,omitempty"`      // 促销簸章文案
+	Badge     string `json:"badge,omitempty"`      // 促销徽章文案
 	FreeUntil string `json:"free_until,omitempty"` // 免费截止日期
 	Note      string `json:"note,omitempty"`       // 本地备注
 }
