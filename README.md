@@ -457,19 +457,23 @@ go test ./... -cover                     # 跑测试
 
 测试全部离线，**不碰网络，也不需要你登录过 WorkBuddy**，只用标准库 `testing`，没有任何第三方测试库。
 
-全仓语句覆盖率 **77%**：
+全仓跨包语句覆盖率 **76.2%**（152 个测试函数）：
 
 | 文件 | 覆盖 | 测什么 |
 |---|---|---|
-| `output.go` / `config.go` / `filter.go` / `logger.go` | 100% | 参数解析、pi 配置生成、审核标记探测、日志 |
+| `piconfig.go` / `config.go` | 100% | pi 配置生成、参数解析 |
+| `catalog.go` | 99% | 倍率解析、徽章提取、展示名拼接 |
 | `server.go` | 98% | 路由、鉴权、错误输出 |
+| `logger.go` | 98% | 日志写入与轮转 |
 | `sse.go` | 96% | SSE 聚合（含工具调用分片拼装） |
-| `catalog.go` | 96% | 倍率解析、徽章提取、展示名拼接 |
-| `chat.go` | 93% | 请求体白名单与改写、流式透传 |
-| `client.go` | 90% | 模型目录字段映射与过滤 |
-| `manager.go` | 86% | 登录态定位、续期、请求头组装（含续期回写的完整路径） |
+| `api_usage.go` / `observer.go` | 95% | 用量聚合、审核标记探测与用量解析（**透传不改字节**） |
+| `journal.go` | 94% | 事件文件的追加、尾部读取、损坏行跳过 |
+| `panel.go` / `chat.go` | 92% | 面板路由与凭据校验、请求体白名单与改写、流式透传 |
+| `billing.go` / `client.go` | 91% | 资源包读取（**优先 Precise 字段**）、模型目录映射 |
+| `manager.go` | 88% | 登录态定位、续期、请求头组装（含续期回写的完整路径） |
+| `api_read.go` / `api_control.go` / `control.go` | 82～100% | 面板各接口与停止/重启意图投递 |
 | `atrest.go` | 75% | **与 Python 参考实现的交叉验证**、AAD 字节金标准、错误路径 |
-| `locator.go` / `models.go` | 69% | 登录态文件探测、模型列表输出 |
+| `locator.go` / `models.go` / `daemon.go` | 68～69% | 登录态文件探测、模型列表输出、后台化 |
 
 ### 两类测试
 
@@ -491,17 +495,42 @@ const (
 鉴权头是否真的发出去了、SSE 是否真的逐字节透传、后端错误是否被正确翻译、
 令牌过期时是否真的去续期并把新令牌加密写回文件。
 
-- **零第三方依赖。** 只用 Go 标准库，`go.mod` 里没有 require。
-- 代码分模块：`config` / `atrest` / `credential` / `upstream` / `catalog` / `gateway` / `logging` / `wbapi`。
+- **零第三方依赖（Go 侧）。** 只用 Go 标准库，`go.mod` 里没有 require。
+- 代码分模块：`config` / `atrest` / `credential` / `upstream` / `catalog` / `gateway` / `journal` / `billing` / `panel` / `logging` / `wbapi`。
 - 开发约定、架构决策、踩过的坑都记在 `AGENTS.md`（**不提交到仓库**）。
 
-### 它只连通三个后端接口
+### Web 控制台
+
+前端源码在 `web/`，栈是 **Vite + Svelte 5 + Chart.js**，不引 CSS 框架。
+
+```bash
+cd web
+npm install
+npm run build     # 输出到 ../internal/webui/dist
+npm run dev       # 可选：热更新，需要网关已经在跑
+```
+
+**构建产物（`internal/webui/dist/`）是入库的**，就是为了让你 clone 下来直接 `go build`
+就能出带界面的二进制，不需要 Node。所以**改了前端一定要重新 build 并提交** `dist`。
+
+`internal/webui/dist` 而不是 `web/dist`，是因为 `go:embed` 不能引用上级目录；
+嵌入的资源必须由拥有它的那个包自己声明。
+
+字体（Archivo Black / Work Sans / Space Mono 的 latin 子集，共 79 KB）也是自托管的，
+嵌入二进制。**项目承诺不向任何第三方回传数据，所以不能用字体 CDN** ——
+那会把这句话变成假话。三个字体都没有中文字形，中文走系统回退；嵌 CJK 要 5～15 MB，不值得。
+
+### 它只连通这几个后端接口
 
 | 用途 | 接口 |
 |---|---|
 | 对话补全 | `POST /v2/chat/completions` |
 | 令牌续期 | `POST /v2/plugin/auth/token/refresh` |
 | 模型目录 | `GET /console/enterprises/personal/models` |
+| 资源包余额 | `POST /v2/billing/meter/get-user-resource` |
+
+前三个走 `copilot.tencent.com`，余额走 `www.codebuddy.cn` —— 两个不同的域名，
+仅看代码很容易找错地方。
 
 对话接口返回的本来就是标准 OpenAI SSE，所以网关是**字节透传**，不做协议翻译。
 唯一的感觉不到的工作是：补鉴权头、把 pi 的 `developer` 角色改成后端认的 `system`、
