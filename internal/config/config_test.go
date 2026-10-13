@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"strings"
 	"testing"
+
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/appdir"
 )
 
 // TestParseDefaults 不传参数时的默认值必须与 README 写的一致，
@@ -16,9 +18,13 @@ func TestParseDefaults(t *testing.T) {
 	if cfg.ListenAddr != "127.0.0.1:8788" {
 		t.Errorf("ListenAddr = %q", cfg.ListenAddr)
 	}
-	if cfg.APIKey != "" || cfg.AuthFile != "" || cfg.AtRestSecret != "" ||
-		cfg.LogPath != "" || cfg.Promotions != "" {
+	if cfg.APIKey != "" || cfg.AuthFile != "" || cfg.AtRestSecret != "" || cfg.Promotions != "" {
 		t.Errorf("默认配置不该有非空的可选字段：%+v", cfg)
+	}
+	// 日志默认写到配置目录，而不是只进标准输出；
+	// 否则重启后历史就没了，拦截率之类的统计无从谈起。
+	if cfg.LogPath != appdir.LogPath() {
+		t.Errorf("LogPath = %q，期望默认路径 %q", cfg.LogPath, appdir.LogPath())
 	}
 	if cfg.PiOutput {
 		t.Error("默认不该输出 pi 配置")
@@ -58,5 +64,16 @@ func TestParseRejectsEmptyAddr(t *testing.T) {
 	_, err := Parse([]string{"-addr", ""}, &bytes.Buffer{})
 	if err == nil || !strings.Contains(err.Error(), "监听地址") {
 		t.Fatalf("应当报监听地址不能为空，实际：%v", err)
+	}
+}
+
+// TestParseAllowsSilencingLog 显式传空串表示不落盘，只写标准输出。
+func TestParseAllowsSilencingLog(t *testing.T) {
+	cfg, err := Parse([]string{"-log", ""}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatalf("解析失败：%v", err)
+	}
+	if cfg.LogPath != "" {
+		t.Errorf("LogPath = %q，期望空串", cfg.LogPath)
 	}
 }

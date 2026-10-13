@@ -75,10 +75,32 @@ func TestPrintfAppends(t *testing.T) {
 	}
 }
 
-// TestNewRejectsBadPath 路径不可用时要在启动阶段就报错，
+// TestNewCreatesMissingDirectory 默认日志路径的目录在首次运行时还不存在，
+// 要能自动建出来，否则一启动就失败。
+func TestNewCreatesMissingDirectory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "nested", "deeper", "gateway.log")
+	logger, err := New(path)
+	if err != nil {
+		t.Fatalf("应当自动创建目录：%v", err)
+	}
+	logger.Printf("首次运行")
+	if err := logger.Close(); err != nil {
+		t.Fatalf("Close 报错：%v", err)
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("日志文件没建出来：%v", err)
+	}
+}
+
+// TestNewRejectsBadPath 目录建不出来时要报错，
 // 而不是等服务跑起来后每写一条日志都静默失败。
 func TestNewRejectsBadPath(t *testing.T) {
-	if _, err := New(filepath.Join(t.TempDir(), "不存在的目录", "out.log")); err == nil {
-		t.Fatal("目录不存在时应当报错")
+	// 父路径是一个普通文件，MkdirAll 必然失败。
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("准备测试介质失败：%v", err)
+	}
+	if _, err := New(filepath.Join(blocker, "gateway.log")); err == nil {
+		t.Fatal("父路径不是目录时应当报错")
 	}
 }

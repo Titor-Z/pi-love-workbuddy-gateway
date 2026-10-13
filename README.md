@@ -129,7 +129,7 @@ pi --model workbuddy/step-5-preview "帮我看看这个项目"
 | `-auth-file` | 自动探测 | 手动指定登录态文件 |
 | `-at-rest-secret` | 自动获取 | 手动指定解密用的根密钥 |
 | `-promotions` | 见下 | 手动指定促销配置文件 |
-| `-log` | 空 | 把请求日志写进文件 |
+| `-log` | `~/.config/piloveworkbuddy/gateway.log` | 日志路径；显式传空串则只写屏幕 |
 
 ---
 
@@ -149,9 +149,35 @@ Hy3 · 免费 · 限时免费 · 至2026-10-31
 
 ---
 
-## 配置文件
+## 配置文件与日志
 
-都放在 `~/.config/piloveworkbuddy/` 下面。
+都放在 `~/.config/piloveworkbuddy/` 下面。目录不存在会在首次启动时自动创建。
+
+```
+~/.config/piloveworkbuddy/
+├─ promotions.json   ← 促销活动（免费到哪天）
+└─ gateway.log       ← 请求日志
+```
+
+### `gateway.log`
+
+每次启动与每次请求都会记一行，末尾追加，不会覆盖历史：
+
+```
+[2026-10-14 04:21:31] 版本：v0.1.1
+[2026-10-14 04:21:31] 登录态：/Users/你/Library/.../workbuddy-desktop.info
+[2026-10-14 04:21:31] 密钥指纹：9127dea1b44020a7
+[2026-10-14 04:21:41] ▶ hy3 | stream=true
+[2026-10-14 04:21:44] ◀ hy3 | 2.555s | 流式完成
+```
+
+日志里**不会出现任何令牌**。如果某次回复被后端的内容审核拦了，会额外记一条：
+
+```
+[2026-10-14 04:21:44] ⚠️ 疑似内容审核拦截 | hy3
+```
+
+启动时加 `-log ""` 可以关掉落盘，只写屏幕。
 
 ### `promotions.json`
 

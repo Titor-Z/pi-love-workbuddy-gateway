@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"math"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -54,34 +53,6 @@ func LoadPromotions(path string) (*Promotions, error) {
 		return nil, fmt.Errorf("促销配置不是合法 JSON：%w", err)
 	}
 	return table, nil
-}
-
-// configDirName 是本项目在所有用户配置文件所在目录名。
-const configDirName = "piloveworkbuddy"
-
-// DefaultConfigDir 返回本项目的配置目录，遵循 XDG 习惯：
-// 优先 $XDG_CONFIG_HOME，否则 ~/.config。
-// 不在 macOS 上改用 ~/Library/Application Support，是为了让三平台的路径保持一致，
-// 文档里只写一种。
-func DefaultConfigDir() string {
-	base := os.Getenv("XDG_CONFIG_HOME")
-	if base == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		base = filepath.Join(home, ".config")
-	}
-	return filepath.Join(base, configDirName)
-}
-
-// DefaultPromotionsPath 返回促销配置的默认位置。
-func DefaultPromotionsPath() string {
-	dir := DefaultConfigDir()
-	if dir == "" {
-		return ""
-	}
-	return filepath.Join(dir, "promotions.json")
 }
 
 // Lookup 取某个模型的促销信息。

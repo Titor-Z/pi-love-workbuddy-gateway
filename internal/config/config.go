@@ -5,6 +5,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/appdir"
 )
 
 // Config 是网关的运行期配置。
@@ -18,7 +20,8 @@ type Config struct {
 	// AtRestSecret 是解密登录态用的 at-rest 根密钥（44 字符 base64）；
 	// 留空时依次尝试环境变量与 WorkBuddy 原生层。
 	AtRestSecret string
-	// LogPath 非空时把请求日志追加写入该文件；留空则只写标准输出。
+	// LogPath 是请求日志文件路径；默认为配置目录下的 gateway.log，
+	// 显式传空串则只写标准输出。
 	LogPath string
 	// Promotions 是本地促销配置文件路径，用于补上后端不提供的免费截止日期；
 	// 留空时回退到默认位置。
@@ -37,7 +40,7 @@ func Parse(args []string, errOut io.Writer) (*Config, error) {
 	fs.StringVar(&cfg.APIKey, "api-key", "", "本地访问密钥，留空表示不校验")
 	fs.StringVar(&cfg.AuthFile, "auth-file", "", "WorkBuddy 登录态文件路径，留空自动探测")
 	fs.StringVar(&cfg.AtRestSecret, "at-rest-secret", "", "at-rest 根密钥（44 字符 base64），留空自动获取")
-	fs.StringVar(&cfg.LogPath, "log", "", "请求日志文件路径，留空只写标准输出")
+	fs.StringVar(&cfg.LogPath, "log", appdir.LogPath(), "请求日志路径，留空只写标准输出")
 	fs.StringVar(&cfg.Promotions, "promotions", "", "促销配置文件路径，留空用默认位置")
 	fs.BoolVar(&cfg.PiOutput, "pi", false, "（仅 models 子命令）输出 pi 的 models.json")
 	if err := fs.Parse(args); err != nil {

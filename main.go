@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/appdir"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/atrest"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/config"
@@ -96,6 +97,7 @@ func runServe(args []string) error {
 	logger.Printf("版本：%s", version)
 	logger.Printf("登录态：%s", cred.Path())
 	logger.Printf("密钥指纹：%s", cipher.KeyID())
+	logger.Printf("日志：%s", cfg.LogPath)
 	logger.Printf("监听：http://%s", cfg.ListenAddr)
 	logger.Printf("    GET  /health")
 	logger.Printf("    GET  /v1/models")
@@ -169,5 +171,5 @@ func resolvePromotionsPath(cfg *config.Config) string {
 	if cfg.Promotions != "" {
 		return cfg.Promotions
 	}
-	return catalog.DefaultPromotionsPath()
+	return appdir.PromotionsPath()
 }

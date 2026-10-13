@@ -143,28 +143,6 @@ func TestLoadPromotionsRejectsMalformed(t *testing.T) {
 	}
 }
 
-// TestDefaultPromotionsPathFollowsXDG 钉住配置目录的解析规则。
-// macOS 上尤其重要：不能落到 ~/Library/Application Support，
-// 否则三平台路径不一致。
-func TestDefaultPromotionsPathFollowsXDG(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", "/tmp/xdg-test-root")
-	if got, want := DefaultConfigDir(), "/tmp/xdg-test-root/"+configDirName; got != want {
-		t.Errorf("DefaultConfigDir = %q，期望 %q", got, want)
-	}
-	if got, want := DefaultPromotionsPath(), "/tmp/xdg-test-root/"+configDirName+"/promotions.json"; got != want {
-		t.Errorf("DefaultPromotionsPath = %q，期望 %q", got, want)
-	}
-
-	t.Setenv("XDG_CONFIG_HOME", "")
-	home, err := os.UserHomeDir()
-	if err != nil {
-		t.Skip("拿不到用户主目录，跳过")
-	}
-	if got, want := DefaultConfigDir(), filepath.Join(home, ".config", configDirName); got != want {
-		t.Errorf("未设 XDG_CONFIG_HOME 时 = %q，期望 %q", got, want)
-	}
-}
-
 // writePromotions 把内容写进临时文件并返回路径。
 func writePromotions(t *testing.T, content string) string {
 	t.Helper()

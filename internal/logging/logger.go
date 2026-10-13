@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 )
@@ -18,10 +19,16 @@ type Logger struct {
 }
 
 // New 构造日志器。path 为空时只写标准输出。
+// path 的父目录不存在时会自动创建，避免首次运行因目录未建而启动失败。
 func New(path string) (*Logger, error) {
 	logger := &Logger{sink: os.Stdout}
 	if path == "" {
 		return logger, nil
+	}
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return nil, fmt.Errorf("创建日志目录失败：%w", err)
+		}
 	}
 	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
