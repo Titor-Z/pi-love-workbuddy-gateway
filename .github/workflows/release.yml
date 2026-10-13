@@ -15,12 +15,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 检出代码
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
+      # 本项目零第三方依赖，没有 go.sum，开着缓存只会白报一个 warning。
       - name: 安装 Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: false
 
       # 发布正文直接取 CHANGELOG。该文件只写「即将发布的那一版」，
       # 所以如果它还是空的或忘了改，这里直接拦下，避免发出一个没有说明的 Release。
