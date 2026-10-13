@@ -38,7 +38,7 @@ func TestWritePiModels(t *testing.T) {
 	}, nil)
 
 	var out bytes.Buffer
-	if err := writePiModels(&out, entries, "http://127.0.0.1:8788/v1", ""); err != nil {
+	if err := catalog.WritePiConfig(&out, entries, "http://127.0.0.1:8788/v1", ""); err != nil {
 		t.Fatalf("生成配置失败：%v", err)
 	}
 
@@ -65,14 +65,14 @@ func TestWritePiModels(t *testing.T) {
 		t.Error("缺少 $schema")
 	}
 
-	provider, ok := payload.Providers[piProviderName]
+	provider, ok := payload.Providers[catalog.PiProviderName]
 	if !ok {
-		t.Fatalf("缺少 provider %s", piProviderName)
+		t.Fatalf("缺少 provider %s", catalog.PiProviderName)
 	}
 	if provider.API != "openai-completions" {
 		t.Errorf("api = %q", provider.API)
 	}
-	if provider.APIKey != piPlaceholderKey {
+	if provider.APIKey != catalog.PiPlaceholderKey {
 		t.Errorf("未指定密钥时应填占位值，实际 %q", provider.APIKey)
 	}
 	if provider.BaseURL != "http://127.0.0.1:8788/v1" {

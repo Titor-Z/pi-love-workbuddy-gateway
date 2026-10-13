@@ -20,6 +20,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/gateway"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/panel"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/upstream"
 )
 
@@ -75,7 +76,7 @@ func run(args []string) error {
 			return err
 		}
 		cfg.Daemon = false
-		return runServe(cfg)
+		return runServe(cfg, args)
 	}
 	cfg, err := config.Parse(args, os.Stderr)
 	if err != nil {
@@ -86,7 +87,7 @@ func run(args []string) error {
 	if cfg.Daemon && !daemon.IsChild() {
 		return runInBackground(cfg, args)
 	}
-	return runServe(cfg)
+	return runServe(cfg, args)
 }
 
 // runInBackground 派生后台进程并把 PID 报给用户，方便随时停掉。
@@ -104,7 +105,7 @@ func runInBackground(cfg *config.Config, args []string) error {
 }
 
 // runServe 装配各模块并启动 HTTP 服务，直到收到中断信号。
-func runServe(cfg *config.Config) error {
+func runServe(cfg *config.Config, args []string) error {
 	// 后台运行时子进程的标准输出已指向日志文件，再写一遍会让每行重复。
 	logger, err := logging.New(cfg.LogPath, !daemon.IsChild())
 	if err != nil {
@@ -126,10 +127,42 @@ func runServe(cfg *config.Config) error {
 	}
 	defer events.Close()
 
-	server := gateway.NewServer(cfg, cred, upstream.NewClient(cred, ""), promotions, logger, events)
+	// 网关与面板共用一个上游客户端：两条路径共用令牌续期与重试逻辑。
+	client := upstream.NewClient(cred, "")
+	startedAt := time.Now()
+
+	gatewayHandler := gateway.NewServer(cfg, cred, client, promotions, logger, events).Handler()
+	control := panel.NewControl()
+	console, err := panel.New(panel.Deps{
+		Version:        version,
+		StartedAt:      startedAt,
+		AuthFile:       cred.Path(),
+		ListenAddr:     cfg.ListenAddr,
+		LogPath:        cfg.LogPath,
+		JournalPath:    cfg.JournalPath,
+		PromotionsPath: resolvePromotionsPath(cfg),
+		Credential:     cred,
+		Upstream:       client,
+		Billing:        billing.NewClient(cred, ""),
+		Promotions:     promotions,
+		Journal:        events,
+		Logger:         logger,
+		Control:        control,
+	})
+	if err != nil {
+		return err
+	}
+
+	// 面板挂在根路径，网关的接口挂在各自的路径上。
+	// /v1/* 与 /health 仍然只走网关那套 OpenAPI 兼容处理，不受面板影响。
+	root := http.NewServeMux()
+	root.Handle("/v1/", gatewayHandler)
+	root.Handle("/health", gatewayHandler)
+	root.Handle("/", console.Handler())
+
 	httpServer := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           server.Handler(),
+		Handler:           root,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -139,6 +172,7 @@ func runServe(cfg *config.Config) error {
 	logger.Printf("日志：%s", describeLogPath(cfg.LogPath))
 	logger.Printf("事件：%s", describeLogPath(cfg.JournalPath))
 	logger.Printf("监听：http://%s", cfg.ListenAddr)
+	logger.Printf("    控制台    http://%s/", cfg.ListenAddr)
 	logger.Printf("    GET  /health")
 	logger.Printf("    GET  /v1/models")
 	logger.Printf("    POST /v1/chat/completions")
@@ -157,6 +191,8 @@ func runServe(cfg *config.Config) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- httpServer.ListenAndServe() }()
 
+	// 等三种事：服务出错、收到退出信号、或者面板请求停止/重启。
+	var action panel.Action
 	select {
 	case err := <-serveErr:
 		if errors.Is(err, http.ErrServerClosed) {
@@ -165,11 +201,47 @@ func runServe(cfg *config.Config) error {
 		return err
 	case <-ctx.Done():
 		logger.Printf("收到退出信号，正在关闭")
-		events.Append(journal.Record{Kind: journal.KindStop, Message: "收到退出信号，正在关闭"})
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
-		defer cancel()
-		return httpServer.Shutdown(shutdownCtx)
+	case action = <-control.Actions():
 	}
+
+	// 先把 HTTP 服务关掉再动手：Shutdown 会等本次响应发完，
+	// 而且它会释放端口，重启时新进程才能立刻绑上。
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+	defer cancel()
+	shutdownErr := httpServer.Shutdown(shutdownCtx)
+
+	switch action {
+	case panel.ActionRestart:
+		events.Append(journal.Record{Kind: journal.KindStop, Message: "面板请求重启"})
+		return restartSelf(cfg, args, logger, events)
+	case panel.ActionStop:
+		events.Append(journal.Record{Kind: journal.KindStop, Message: "面板请求停止"})
+		logger.Printf("已按面板请求停止")
+	default:
+		events.Append(journal.Record{Kind: journal.KindStop, Message: "收到退出信号，正在关闭"})
+	}
+	return shutdownErr
+}
+
+// restartSelf 在退出前把新的自己派生出来，实现面板上的「重启」。
+//
+// 不用 exec 替换自身：那样能保住 PID，但要求调用发生在主线程，
+// 且 Windows 上不可用。派生新进程 + 退出是跨平台一致的写法。
+// 代价是 PID 会变，因此面板不显示「固定 PID」，只显示当前进程。
+func restartSelf(cfg *config.Config, args []string, logger *logging.Logger,
+	events *journal.Journal) error {
+
+	logger.Printf("正在重启：派生新进程")
+	if _, err := daemon.Start(args, cfg.LogPath); err != nil {
+		// 重启失败要及时报出来——这时服务已经停了，
+		// 用户面对的是一片空白，必须知道该手工拉起来。
+		logger.Printf("✗ 重启失败：%v", err)
+		events.Append(journal.Record{Kind: journal.KindError,
+			Message: "重启失败：" + err.Error(), Error: err.Error()})
+		return fmt.Errorf("重启失败：%w", err)
+	}
+	logger.Printf("新进程已接管，本进程退出")
+	return nil
 }
 
 // runModels 拉取实时模型目录并打印，可选输出成 pi 的 models.json。
@@ -188,7 +260,7 @@ func runModels(cfg *config.Config) error {
 	}
 	entries := catalog.Build(models, promotions)
 	if cfg.PiOutput {
-		return writePiModels(os.Stdout, entries, piGatewayBaseURL(cfg), cfg.APIKey)
+		return catalog.WritePiConfig(os.Stdout, entries, piGatewayBaseURL(cfg), cfg.APIKey)
 	}
 	return writeTable(os.Stdout, entries)
 }

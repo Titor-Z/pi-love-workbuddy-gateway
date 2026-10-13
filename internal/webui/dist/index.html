@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="plwg-nonce" content="__PLWG_NONCE__" />
+    <title>pi-love-workbuddy-gateway</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 48px 24px;
+        background: #ffffff;
+        color: #000000;
+        font-family: "Work Sans", "PingFang SC", "Microsoft YaHei", sans-serif;
+        font-size: 16px;
+        line-height: 1.6;
+      }
+      main {
+        max-width: 720px;
+        margin: 0 auto;
+        border: 5px solid #000000;
+        padding: 24px;
+      }
+      h1 {
+        font-size: 32px;
+        line-height: 1.1;
+        margin: 0 0 16px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+      code {
+        font-family: "Space Mono", ui-monospace, monospace;
+        background: #f0f0f0;
+        border: 3px solid #000000;
+        padding: 2px 6px;
+      }
+      pre {
+        font-family: "Space Mono", ui-monospace, monospace;
+        background: #f0f0f0;
+        border: 3px solid #000000;
+        padding: 12px;
+        overflow-x: auto;
+      }
+      .status {
+        border: 3px solid #ffa500;
+        padding: 12px;
+        margin: 16px 0;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        font-size: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>前端未构建</h1>
+      <div class="status">占位页 · 不是故障</div>
+      <p>
+        你拿到的是未经前端构建的源码副本。网关本身工作正常，
+        <code>/v1/chat/completions</code> 与 <code>/v1/models</code> 都可以直接用。
+      </p>
+      <p>要看到 Web 控制台，需要先构建前端：</p>
+      <pre>cd web
+npm install
+npm run build</pre>
+      <p>
+        构建产物会写到 <code>internal/webui/dist</code>，然后重新
+        <code>go build</code> 即可。
+      </p>
+      <p>
+        正式发布的二进制里已经包含构建好的前端，不会有这个页面。
+      </p>
+    </main>
+  </body>
+</html>
