@@ -72,8 +72,10 @@
 
   // 请求数折线：与消耗分开画，因为两个量的单位完全不同，
   // 塞进同一张图会需要一个没人看得懂的右轴。
+  // 横轴用完整日期（10-14），跟上面那张消耗柱状图同一种写法——
+  // 两张图并排在同一条页面上，横轴不该有两套读法。
   const requestsChart = $derived({
-    labels: usage?.days?.map((d) => fmt.dayOnly(d.date)) ?? [],
+    labels: usage?.days?.map((d) => fmt.shortDate(d.date)) ?? [],
     datasets: [
       {
         label: "请求数",
