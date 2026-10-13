@@ -316,7 +316,23 @@ MIT 只约束**本仓库代码**的授权事宜，**不构成**对上游服务�
 ```bash
 go build -o pi-love-workbuddy-gateway .   # 编译
 go vet ./...                              # 检查
+go test ./... -cover                     # 跑测试
 ```
+
+测试全部离线，不碰网络，也不需要你登录过 WorkBuddy：
+
+| 包 | 覆盖 | 测什么 |
+|---|---|---|
+| `atrest` | 62% | **与 Python 参考实现的交叉验证**（同一密钥 + 同一 nonce 必须算出同一密文）、AAD 字节金标准、加解密往返、错误路径 |
+| `catalog` | 91% | 倍率解析、簸章提取、展示名拼接、促销配置加载 |
+| `config` | 100% | 参数解析与默认值 |
+| `logging` | 100% | 日志落盘、追加、幂等关闭 |
+| `gateway` | 61% | 请求体白名单与改写、SSE 聚合（含工具调用分片拼装）、审核标记跨块匹配、鉴权 |
+| `credential` | 32% | 登录态定位、续期判定、请求头组装 |
+| `upstream` | 28% | 模型目录字段映射与过滤 |
+
+未覆盖的主要是**需要真实网络的那几条路径**（令牌续期请求、模型目录 HTTP 调用、完整的请求转发），
+它们靠实机验证保证。
 
 - **零第三方依赖。** 只用 Go 标准库，`go.mod` 里没有 require。
 - 代码分模块：`config` / `atrest` / `credential` / `upstream` / `catalog` / `gateway` / `logging` / `wbapi`。
