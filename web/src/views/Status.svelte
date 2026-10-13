@@ -67,7 +67,7 @@
         <div class="value" style="font-size:24px">{status.version}</div>
         <div class="sub">开发版显示 dev</div>
       </div>
-      <div class="stat" class:accent={status.account?.token_expired}>
+      <div class="stat" class:alert={status.account?.token_expired}>
         <div class="label"><span>登录态</span></div>
         <div class="value" style="font-size:24px">
           {status.account?.token_expired ? "已过期" : "有效"}

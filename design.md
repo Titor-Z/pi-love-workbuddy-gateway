@@ -1,139 +1,389 @@
-# RawBlock Design System
+# Gauge Design System
 
-## Overview
+## 〇、先读这一节
 
-RawBlock is an unapologetic, anti-design system that strips interfaces down to their structural bones. Built for experimental portfolios and avant-garde art sites, it embraces thick borders, system-level aesthetics, and the raw power of black-on-white. There are no rounded corners, no shadows, no polish. Every element looks like it was assembled from HTML primitives -- because that is the point. This is brutalism as a design language.
+这是一份**二手**设计文档，从公开的 RawBlock 设计系统演化而来。**它已经不是 RawBlock 了**，
+以后有人问「为什么和网上那份不一样」，看第二节。
 
----
+改的原因不是审美，是**用途不同**，这一点决定了下面所有差异：
 
-## Colors
+| | RawBlock | Gauge |
+|---|---|---|
+| 用途 | 实验性作品集、先锋艺术站（它的 Overview 自己写的） | 本机数据仪表盘 |
+| 看多久 | 几十秒，要留下印象 | 十秒，要读出数字 |
+| 优化目标 | **冲击力** | **密集之下的可读性** |
+| 形态 | 海报 | 仪表 |
 
-- **Black** (#000000): Text, borders, fills
-- **White** (#FFFFFF): Background, inverse text
-- **Blue** (#0000FF): Links only (hyperlink blue)
-- **Surface Base** (#FFFFFF): App background
-- **Surface Inverted** (#000000): Inverted sections
-- **Success** (#008000): Success (pure green)
-- **Warning** (#FFA500): Warning (pure orange)
-- **Error** (#FF0000): Error (pure red)
-- **Info** (#0000FF): Info (same as link blue)
-
-## Typography
-
-- **Headline Font**: Archivo Black
-- **Body Font**: Work Sans
-- **Mono Font**: Space Mono
-
-- **h1**: Archivo Black 64px regular, 1.0 line height
-- **h2**: Archivo Black 48px regular, 1.05 line height
-- **h3**: Archivo Black 32px regular, 1.1 line height
-- **h4**: Work Sans 22px semibold, 1.2 line height
-- **body**: Work Sans 16px regular, 1.6 line height
-- **small**: Work Sans 14px regular, 1.5 line height
-- **tiny**: Work Sans 12px regular, 1.4 line height
-- **mono**: Space Mono 15px regular, 1.5 line height
+一份为海报写的规范，拿来当仪表的规范用，必然有地方不成立。这份文档把那些地方找出来、
+改掉、并写明为什么 —— 包括我们**否决**了什么，免得以后有人再提一遍。
 
 ---
 
-## Spacing
+## 一、设计立场
 
-Base unit: 8px (intentionally irregular usage)
-Spacing is deliberately inconsistent to create visual tension. Use the scale below as a starting point, then break it when the design demands it.
-- **sp-1**: 4px
-- **sp-2**: 8px
-- **sp-3**: 16px
-- **sp-4**: 24px
-- **sp-5**: 40px
-- **sp-6**: 64px
-- **sp-7**: 80px
-- **sp-8**: 120px
+> **粗野的骨架，仪表的可读性。**
 
-## Border Radius
+四句话概括全部决策：
 
-- **radius-none** (0px): All elements -- no rounding
-Every single element uses 0px border radius. No exceptions.
+1. **层级靠平面分区，不靠阴影。** 边框粗细 + 反白 + 尺度差是仅有的三个层级手段。
+2. **深度靠位移，不靠柔光。** 要「浮起来」就用硬投影（纯色偏移），不用模糊。
+3. **纹理承担语义，不承担装饰。** 斜纹意味着「这里不可用」，不意味着「这里好看」。
+4. **数字是主角，一切为它让路。** 数字永远等宽、永远右对齐、永远不被压缩。
 
-## Elevation
-
-RawBlock uses **no shadows**. Visual hierarchy is achieved exclusively through border weight and scale contrast.
-- **shadow-none**: None. All elements.
-Use border-thin (1px), border-thick (3px), or border-heavy (5px) to define element boundaries.
-
-## Components
-
-### Buttons
-#### Primary
-black (#000000) fill, white (#FFFFFF) text, 3px black border, square. 2px tracking. uppercase text-transform. Hover: background white, text black (full inversion). Active: background black, text white, border 5px.
-#### Secondary
-white fill, black text, 3px black border, square. Hover: background black, text white.
-#### Ghost
-transparent, black text, no border. underline text-decoration. Hover: text blue.
-#### Destructive
-error (#FF0000) fill, white text, 3px black border, square. Hover: background black, text error.
-#### Sizes
-Sizes: Small (6px 16px, 12px, 32px), Medium (10px 24px, 14px, 44px), Large (16px 40px, 18px, 56px).
-#### Disabled State
-surface-sunken fill, content-tertiary text, 3px #CCCCCC border.
-- disabled cursor
 ---
 
-### Cards
-#### Default
-white fill, 3px black border, square, no shadow. sp-4/(24px) padding.
-#### Elevated
-white fill, 5px black border, square, none (heavier border = more importance) shadow. sp-4 padding.
+## 二、与 RawBlock 的差异（改革记录）
+
+### 继承的
+
+- 厚边框作为主要视觉组织手段，**不用阴影表达层级**
+- 零圆角，无例外
+- 纯黑白为主，加一个**仅限链接**的蓝与三个状态色
+- 大写字标 + 字距
+- 按钮/输入/芯片的完整状态定义（hover / active / disabled / focus）
+- 间距 8px 基数
+
+### 改掉的
+
+| # | RawBlock | Gauge | 为什么 |
+|---|---|---|---|
+| 1 | 边框刻度 1/3/5 三级，但组件规格里又冒出 10px | **钉死四级，各自归属明确，禁止中间值**（第五节） | 它唯一的层级手段没有刻度，等于没有层级。实际实现里我们已经滑到 8 个值 |
+| 2 | 色板声明 6 色，正文却用了 10 个 hex | **全部 token 化声明**（第四节） | `#CCCCCC`/`#E8E8E8`/`#F0F0F0`/`#F5F5F5` 从未被列为 token |
+| 3 | 引用 `content-primary`、`surface-sunken` 等语义名，**全文没定义过** | 语义名与色值一一对应，写在同一张表里 | 未定义的名字不是规范，是草稿 |
+| 4 | h1 64 / h2 48 / h3 32 | **两套刻度**：展示刻度（保留原值，面板里几乎不用）+ 密集刻度（默认）（第六节） | 海报尺寸的标题在数据面板里只负责分区，不管渲染气势 |
+| 5 | 「间距刻意不规则，制造视觉张力」 | **不规则只用在分区之间；表格内部严格对齐**（第七节） | 跨行比较数字的地方，不规则就是灾难 |
+| 6 | 没有暗色 | 有一套暗色，且**不是反色**（第四节） | —— |
+| 7 | 没有动效规范 | 只允许三个场景（第十节） | 规范的价值在于**说清什么不动画** |
+| 8 | 没有可访问性约定 | 对比度下限 + `prefers-*` + 焦点可见（第十一节） | —— |
+| 9 | 输入框 focus 改成 5px 边框 | 焦点**用 outline**，不改边框宽度 | 改边框宽度会让布局跳动。这是原规范的一个缺陷 |
+| 10 | 没有「数据」这一层 | 表格、图表配色、数字对齐、状态标记（第九节） | 这份文档的主要服务对象就是数据 |
+
 ---
 
-### Inputs
-surface-sunken (#F0F0F0) fill, content-primary text, 3px black border, square. Space Mono 15px. 10px/12px padding.
-- **Default**: 3px black border.
-- **Hover**: 3px black border, background #E8E8E8 other.
-- **Focus**: 5px black border, outline none other.
-- **Error**: 3px error border.
-- **Disabled**: 3px #CCCCCC border, background #F5F5F5 other.
-#### Label
-content-primary text. Archivo Black 14px regular uppercase. 4px margin-bottom.
-#### Helper Text
-content-secondary (default) | error (error state) text. Work Sans 12px regular. 4px margin-top.
+## 三、明确否决
+
+写在这里是为了**以后不再讨论**。
+
+### 玻璃拟态 / 毛玻璃 / 磨砂玻璃
+
+**这三个词指同一样东西**：`backdrop-filter: blur()` + 半透明底。一并否决。
+
+1. 它是要解决「让浮层与下方内容保持联系」。本设计用**边框粗细**解决层级，
+   同一个问题不需要两套解法，并存只会互相抵消 —— 一个厚边框卡片再加玻璃底，
+   既得不到粗野的干脆，也得不到材料的通透，只会得到一个没人设计过的第三样东西。
+2. 它**必须配圆角和柔光**才成立，而圆角是红线。
+3. 半透明面上的文字需要**更高**的对比度才读得清。我们的内容是高密度表格和图表，
+   正是半透明背景最不该出现的场景 —— 它解决不了对比度问题，只会制造它。
+4. `backdrop-filter` 在长表格 + canvas 图表上滚动会持续重绘，有实际代价。
+
+### 新拟物（Neumorphism / Soft UI）
+
+最不可能成立的一个。它靠同色背景 + 双向柔光阴影 + **大圆角**活着，
+而且**故意**让元素与背景的对比度接近零。放到仪表盘上，就是灰色数字在灰色底上。
+否决。
+
+### 柔光阴影
+
+与「无圆角」不兼容，与「层级靠平面」冲突。要深度用**硬投影**（第八节）。
+
+### 噪点 / 颗粒纹理
+
+全屏合成都换不来什么。否决。
+
+### 描边文字（outlined type）
+
+让数字更难读，而数字是这里的主角。否决。
+
+### 弹性动画 / 回弹
+
+本界面没有手势驱动的东西。弹跳在没有惯性来源的地方是错的。否决。
+
 ---
 
-### Chips
-#### Filter Chip
-white fill, black text, 2px black border, square. 4px/12px padding, uppercase, 10px, tracking 1px text-transform. Active: background black, text white.
-#### Status Chip
-square, 2px respective color border. 11px semibold uppercase tracking 1px. 2px/10px padding.
-- **Active**: #FFFFFF fill, #008000 text, #008000 border.
-- **Warning**: #FFFFFF fill, #FFA500 text, #FFA500 border.
-- **Error**: #FFFFFF fill, #FF0000 text, #FF0000 border.
-- **Default**: #FFFFFF fill, #000000 text, #000000 border.
+## 四、色彩
+
+### token 表
+
+语义名与色值写在同一张表里 —— 这是本次改革要修的问题之一。
+
+| token | 亮色 | 暗色 | 用途 |
+|---|---|---|---|
+| `--paper` | `#FFFFFF` | `#141416` | 底色 |
+| `--surface` | `#F2F2F2` | `#1C1C1F` | 代码块、底纹 |
+| `--hover` | `#F7F7F7` | `#232327` | 行悬停 |
+| `--ink` | `#000000` | `#E4E4E7` | 正文、标题 |
+| `--rule` | `#000000` | `#6B6B72` | 结构性边框 |
+| `--line` | `#CCCCCC` | `#3A3A3F` | 数据行分隔 |
+| `--muted` | `#4D4D4D` | `#9A9AA1` | 次要文字 |
+| `--invert-bg` | `#000000` | `#3F3F45` | 反白块底色 |
+| `--invert-fg` | `#FFFFFF` | `#E4E4E7` | 反白块文字 |
+| `--invert-muted` | `#B3B3B3` | `#B8B8BF` | 反白块里的次要文字 |
+| `--link` | `#0000FF` | `#7AA2FF` | **仅链接** |
+| `--ok` | `#008000` | `#35C46A` | 成功 |
+| `--warn` | `#FFA500` | `#FFB340` | 警告 |
+| `--error` | `#FF0000` | `#FF6B6B` | 失败 |
+| `--disabled-bg` | `#F5F5F5` | `#1F1F22` | 禁用底 |
+| `--disabled-fg` | `#808080` | `#6B6B72` | 禁用文字 |
+| `--disabled-rule` | `#CCCCCC` | `#3F3F45` | 禁用边框 |
+
+### 状态色是保留色
+
+`--ok` / `--warn` / `--error` **只表示状态**，永远不做配色。
+蓝色 `--link` **只给链接**。
+
+「拿一个状态色当第三个模型的数据系列颜色」是禁止的 ——
+读者会以为那个模型有特殊含义。
+
+### 图表分类色：另开一组
+
+数据系列需要多色，但状态色被保留了，所以另开一组，并**避开绿/橙/红**。
+
+| token | 亮色 | 暗色 |
+|---|---|---|
+| `--chart-1` | `#000000` | `#D5D5DA` |
+| `--chart-2` | `#0000FF` | `#7AA2FF` |
+| `--chart-3` | `#800080` | `#C77DFF` |
+| `--chart-4` | `#FF00FF` | `#FF7AE0` |
+| `--chart-5` | `#008080` | `#2EC4C4` |
+| `--chart-6` | `#8B4513` | `#E08A4A` |
+| `--chart-7` | `#4B0082` | `#9D7BFF` |
+| `--chart-8` | `#808000` | `#C4C44A` |
+
+`--chart-1` 在亮色下是纯黑、暗色下是浅灰而非纯白 —— 它是面积最大的一块颜色，
+纯白在黑底上会发光。
+
+### 暗色不是反色
+
+直接反转得到纯白配纯黑，对比度 21:1 —— 那是**印刷品**的对比度，屏幕上会发光、发糊。
+三条修正：
+
+1. **底色抬离纯黑**（`#141416`）。用抬高的灰表达「层」：下层是页面、上层是卡片。
+   靠明度差，不靠更亮的描边。
+2. **文字不用纯白**（`#E4E4E7`）。仍然 14:1，远超可读性要求，但不刺眼。
+3. **边框单独一档色**（`--rule`）。关键的物理直觉：
+   **黑色在白底上是「收」的，白色在黑底上是「放」的** —— 同样的线宽，白线厚得多。
+
+反白块同理：暗色下不用纯白填充（那会是整屏最亮的东西），降到 `--invert-bg`。
+
 ---
 
-### Lists
-transparent, Work Sans, 16px text. 3px black divider, 12px 0px item padding. Hover: text-decoration underline. Active: background black, text white, full-width.
-- No trailing icons; text only
+## 五、边框刻度（钉死）
+
+**这是本系统唯一的层级手段，所以刻度必须没有歧义。**
+
+规则一句话：**嵌套越深，线越细。**
+
+| 宽度 | 归属 | 用在 |
+|---|---|---|
+| **5px** | 结构 | 顶栏、页脚、卡片、统计块、图表框、提示条的强调边 |
+| **3px** | 元素 | 按钮、输入框、标签、分区标题下沿、提示条其余三边 |
+| **2px** | 元素内部标记 | 芯片、状态点、角标 |
+| **1px** | 数据行之间 | 表格行、日志行、列表项 |
+
+**禁止 4px、6px、8px、10px 及任何其他值。** 需要「更重」的时候，
+换手段（反白、硬投影、尺度差），不是换一个中间值。
+
 ---
 
-### Checkboxes
-20px x 20px, 3px black border, square. white unchecked background, black checked background, white, 3px stroke checkmark. Focus: 5px border. Disabled: border #CCCCCC, background #F5F5F5.
+## 六、字号
+
+### 两套刻度
+
+**展示刻度**（继承 RawBlock 原值，只用于罕见的开场/空状态大标题）：
+
+| | 字体 | 字号 | 行高 |
+|---|---|---|---|
+| display-1 | Archivo Black | 64px | 1.0 |
+| display-2 | Archivo Black | 48px | 1.05 |
+
+**密集刻度**（默认，界面上 99% 的字都用这套）：
+
+| | 字体 | 字号 | 行高 |
+|---|---|---|---|
+| h1 | Archivo Black | 34px | 1.1 |
+| h2 | Archivo Black | 22px | 1.15 |
+| h3 | Archivo Black | 15px | 1.3 |
+| stat | Space Mono | 34px | 1.15 |
+| body | Work Sans | 15px | 1.6 |
+| table | Work Sans / Space Mono | 13px | 1.5 |
+| small | Work Sans | 12px | 1.5 |
+| label | Work Sans | 11px | 1.4 |
+| tag | Space Mono | 10px | 1.4 |
+
+### 数字
+
+**数字永远等宽（Space Mono），永远右对齐（`.num`）。**
+这是仪表盘的硬要求：一列数字不等宽，就没法竖着比较。
+
+中文字形不在三个设计字体里，走系统回退（PingFang SC / Microsoft YaHei / Noto Sans CJK SC）。
+嵌入 CJK 要 5～15MB，不值得。
+
 ---
 
-### Radio Buttons
-20px x 20px, 3px black border. circle (the one exception to 0px radius) shape. Unchecked: white fill. Selected: black border, inner dot 10px black. Focus: 5px border. Disabled: border #CCCCCC.
+## 七、间距
+
+基数 8px。
+
+**不规则只允许出现在分区之间**（`.section` 的上下留白、网格的列宽），
+用来制造节奏。
+
+**表格、表单、任何需要跨行比较的地方，必须严格对齐。**
+RawBlock 的「刻意不规则制造张力」在数据面前是反向的。
+
 ---
 
-### Tooltips
-black fill, white, 13px, Space Mono text, square, none (inverted block) border, no shadow. 8px/12px padding, none (positioned directly adjacent) arrow, 260px max width.
+## 八、纹理与深度
+
+### 硬投影（唯一允许的「浮起」手段）
+
+```
+box-shadow: 8px 8px 0 var(--ink);
+```
+
+纯色、无模糊、零圆角 —— 与「深度靠位移」一致。
+
+**严格限量：每个页面最多一处。** 它很吵，30 行表格每行都投影会变成一团噪音。
+只给**当页唯一的主角**。
+
+**注意它与反白互斥**：两者都是 `--invert-*`/`--ink` 的黑，叠在一起投影就看不见了。
+所以主角只有两条路 —— **反白块**，或**白底 + 硬投影**，不是两个一起上。
+
+当前实现里**没有任何元素在用硬投影**：主角用反白就够，而且反白作为信号强得多
+（整块反色 vs 一道 8px 的深色边）。这个规则留着，因为它是这套语言里表达「浮起」的正解，
+需要的时候不用重新发明。
+
+### 反白块（比硬投影优先）
+
+`--invert-bg` / `--invert-fg`。给「主角」用。
+
+反白**优先于**硬投影：它更安静，且完全在原词汇内。
+只有当反白不足以表达时，才用硬投影。
+
+### 斜纹（承担语义）
+
+```css
+repeating-linear-gradient(45deg, transparent 0 4px, var(--line) 4px 8px)
+```
+
+印刷里「不可用」的通用记号。**用在空状态**（没有数据的地方）。
+**不用于装饰。**
+
+### 平面色块
+
+状态色**可以大面积铺**，不只是做标签。
+但只在状态本身需要被立刻看见时（例如「全部被拦截」的整条提示）。
+
 ---
 
-## Do's and Don'ts
+## 九、组件
 
-1. **Do** use thick borders (3-5px) as the primary visual organizer; they replace shadows entirely.
-2. **Don't** round any corners -- ever. Sharp edges are non-negotiable in this system.
-3. **Do** use full color inversions (black to white, white to black) for hover and active states.
-4. **Don't** use opacity for disabled states; use lighter border colors and grey fills instead.
-5. **Do** use Archivo Black at large sizes (48-64px) for maximum visual impact.
-6. **Don't** use the blue (#0000FF) for anything other than hyperlinks; it is reserved.
-7. **Do** embrace intentional spacing irregularity -- asymmetric layouts are encouraged.
-8. **Do** use uppercase + tracking for buttons and labels to amplify the raw aesthetic.
-9. **Don't** add decorative images, icons, or illustrations; content and typography do the work.
-10. **Don't** polish or refine; if something looks too "designed," strip it back further.
+### 按钮
+
+3px 边框，零圆角，大写，字距 1px。
+
+| 状态 | 表现 |
+|---|---|
+| 默认 | `--paper` 底，`--ink` 字与边 |
+| hover | `--invert-bg` 底，`--invert-fg` 字 |
+| **active** | 同上，且**立即生效**（无过渡）—— 反馈在按下时，不等松开 |
+| 选中（`aria-pressed`） | `--invert-bg` 底，`--invert-fg` 字 |
+| **disabled** | `--disabled-bg` 底，`--disabled-fg` 字，`--disabled-rule` 边 |
+| **focus-visible** | `outline: 3px solid var(--ink)`，`outline-offset: 2px` |
+
+**禁用状态禁止用 `opacity`。** 用灰色的底/字/边。
+半透明会让下层内容透出来，在深色底上尤其糊。
+
+**焦点用 outline，不改边框宽度。** 改宽度会让布局跳动。
+
+### 卡片 / 统计块
+
+5px 边框。统计块里：label 11px 大写，value 34px 等宽，sub 11px `--muted`。
+
+### 表格
+
+- `thead th`：11px 大写、字距 1px、下方 **3px** 线
+- `td` / `tbody th`：13px、下方 **1px** `--line` 线
+- **粗线只管 `thead th`。** 用 `<th>` 当行标签时（左标签右值），
+  它和相邻 `td` 必须同一种线 —— 否则一行里左 3px 右 1px，看着就断了
+- 数字列加 `.num`：右对齐 + 等宽
+
+### 输入 / 文本域
+
+3px 边框，等宽字体，`--paper` 底。焦点同按钮。
+
+### 芯片 / 标签
+
+2px 边框，10px 大写，字距 0.6px。
+填充版（`free` / `paid` / `blocked`）用 `--invert-*` 或状态色 + 反色文字。
+
+### 提示条
+
+3px 边框，左边 **5px** 且着状态色（这是 5px 的合法用法之一：强调条）。
+四类：默认（无左色）、`ok`、`warn`、`error`。
+
+### 空状态
+
+3px 边框 + 斜纹底（第八节）。
+
+### 图表
+
+- 柱/条零圆角（Chart.js 的 `borderRadius: 0`）
+- 网格线与刻度用 `--ink`，轴线 3px
+- 提示框用 `--invert-bg` 底 / `--invert-fg` 字，零圆角
+- 颜色取自 `--chart-*`
+
+---
+
+## 十、动效
+
+**只允许三个场景。**
+
+| 场景 | 时长 | 缓动 |
+|---|---|---|
+| 亮暗主题切换 | 260ms | ease（颜色过渡） |
+| 图表数据更新 | 180ms | 默认 |
+| 视图切换 | 120ms | ease（交叉淡入） |
+
+**除此之外一律不动画。** 尤其是：
+
+- **hover / active 无过渡。** 反馈必须立刻到位。
+- **不做入场动画。** 每次刷新都播一遍是折磨。
+- **不做弹性/回弹。** 本界面没有手势驱动的东西。
+
+### 实现约束
+
+- 主题过渡**只在切换的那一瞬间**挂上（加类名，260ms 后摘掉）。
+  常驻的全局过渡会把悬停、按下这些需要立刻响应的反馈也拖慢。
+- 首次渲染前就把主题定下来（`index.html` 内联脚本），否则暗色下会先闪白底。
+
+---
+
+## 十一、可访问性
+
+| 偏好 | 响应 |
+|---|---|
+| `prefers-reduced-motion: reduce` | 去掉全部过渡 |
+| `prefers-contrast: more` | `--rule` 提回 `--ink`，`--line` 提到 `--muted`。**为柔和做的让步在这个偏好下让位** |
+| `prefers-color-scheme` | 「跟随系统」模式下跟随 |
+
+**对比度下限**：正文 ≥ 7:1，次要文字 ≥ 4.5:1，结构性边框 ≥ 3:1（非文本 UI 的门槛）。
+暗色调色是按这三条定的，不是凭感觉。
+
+**焦点必须可见**，且不能用 `outline: none` 消掉。
+
+---
+
+## 十二、Do / Don't
+
+1. **Do** 用 5/3/2/1px 四级边框组织界面。禁止中间值。
+2. **Do** 用平面分区（边框、反白、尺度）表达层级。
+3. **Do** 让数字等宽且右对齐。
+4. **Do** 让纹理承担语义（斜纹 = 不可用）。
+5. **Do** 在换主题时淡过去。
+6. **Don't** 圆角。任何地方。
+7. **Don't** 柔光阴影、玻璃、模糊。要深度用硬投影。
+8. **Don't** 把状态色当配色用，把蓝色用在链接以外的地方。
+9. **Don't** 用 `opacity` 表示禁用。
+10. **Don't** 为动画而动画。动效只有三个场景。
+11. **Don't** 在需要跨行比较数字的地方制造「视觉张力」。
+12. **Don't** 让每个元素一样重。一页只能有一个主角。

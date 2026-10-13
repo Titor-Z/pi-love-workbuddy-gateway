@@ -17,11 +17,19 @@
   --rule: #000000; /* 粗边框 */
   --line: #cccccc; /* 细分隔线 */
   --muted: #4d4d4d; /* 次要文字 */
-  --faint: #808080; /* 更次的文字、虚线框 */
 
   /* 反向块：黑底白字那种。激活的导航、按下的按钮、付费标记都用它。 */
   --invert-bg: #000000;
   --invert-fg: #ffffff;
+  /* 反白块里的次要文字。单独给一个色，而不是给 --invert-fg 加 opacity——
+     第十二节禁止用半透明做弱化（下层会透出来）。 */
+  --invert-muted: #b3b3b3;
+
+  /* 禁用态：灰底 + 灰字 + 灰边。
+     不用 opacity——半透明会让下层内容透出来，深色底上尤其糊。 */
+  --disabled-bg: #f5f5f5;
+  --disabled-fg: #808080;
+  --disabled-rule: #cccccc;
 
   --link: #0000ff;
   --ok: #008000;
@@ -70,10 +78,14 @@
   --rule: #6b6b72;
   --line: #3a3a3f;
   --muted: #9a9aa1;
-  --faint: #5c5c63;
 
   --invert-bg: #3f3f45;
   --invert-fg: #e4e4e7;
+  --invert-muted: #b8b8bf;
+
+  --disabled-bg: #1f1f22;
+  --disabled-fg: #6b6b72;
+  --disabled-rule: #3f3f45;
 
   /* 只调亮度与饱和度，不动色相：绿还是成功、红还是失败。
      纯蓝 #0000FF 在黑底上几乎看不见，纯红 #FF0000 对比度只有 4.0，
@@ -131,7 +143,6 @@ html {
   [data-theme="dark"] {
     --rule: var(--ink);
     --line: var(--muted);
-    --faint: var(--muted);
   }
 }
 
@@ -307,7 +318,9 @@ footer {
   letter-spacing: 0.6px;
 }
 
-/* ── 区块与卡片 ───────────────────────────────────────── */
+/* ── 区块与卡片 ─────────────────────────────────────────
+   边框刻度见 design.md 第五节，四级钉死：5 结构 / 3 元素 / 2 元素内标记 / 1 数据行。
+   禁止 4、6、8、10 等中间值——要更重就换手段（反白、硬投影、尺度差）。 */
 
 .section {
   margin-bottom: 40px;
@@ -346,7 +359,7 @@ footer {
 }
 
 .card {
-  border: 4px solid var(--rule);
+  border: 5px solid var(--rule);
   padding: 16px;
   background: var(--paper);
 }
@@ -356,7 +369,7 @@ footer {
 }
 
 .stat {
-  border: 4px solid var(--rule);
+  border: 5px solid var(--rule);
   padding: 14px 16px 16px;
 }
 
@@ -390,8 +403,25 @@ footer {
   margin-top: 4px;
 }
 
-.stat.accent {
-  border-width: 6px;
+/* 主角。一页只能有一个（design.md 第十二节）。
+   用反白块而不是更粗的边框——6px 会破坏四级刻度；反白完全在原词汇内。
+   硬投影是更强的选项，但更吵，留给反白不够用的时候。 */
+.stat.hero {
+  background: var(--invert-bg);
+  color: var(--invert-fg);
+}
+.stat.hero .sub {
+  color: var(--invert-muted);
+}
+
+/* 告警：只换边框颜色，不改宽度——宽度属于刻度，颜色属于语义。 */
+.stat.alert {
+  border-color: var(--error);
+}
+
+/* 硬投影：唯一允许的「浮起」手段。纯色位移，不是柔光。 */
+.lifted {
+  box-shadow: 8px 8px 0 var(--ink);
 }
 
 /* ── 表格 ─────────────────────────────────────────────── */
@@ -442,13 +472,16 @@ th.num {
   font-family: var(--font-mono);
 }
 
+/* 空状态用斜纹底。斜纹在印刷里是「此处不可用」的通用记号——
+   纹理承担语义，不承担装饰。 */
 .empty {
   padding: 24px;
   text-align: center;
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--muted);
-  border: 3px dashed var(--faint);
+  border: 3px solid var(--rule);
+  background: repeating-linear-gradient(45deg, transparent 0 5px, var(--line) 5px 10px);
 }
 
 /* ── 标记 ─────────────────────────────────────────────── */
@@ -507,13 +540,17 @@ button.action:hover:not(:disabled) {
   color: var(--invert-fg);
 }
 
-button.action[aria-pressed="true"] {
+button.action[aria-pressed="true"],
+button.action:active:not(:disabled) {
   background: var(--invert-bg);
   color: var(--invert-fg);
 }
 
+/* 禁用态禁止用 opacity（design.md 第十二节）。用灰色的底/字/边。 */
 button.action:disabled {
-  opacity: 0.45;
+  background: var(--disabled-bg);
+  color: var(--disabled-fg);
+  border-color: var(--disabled-rule);
   cursor: not-allowed;
 }
 
@@ -532,15 +569,17 @@ textarea {
   font-family: var(--font-mono);
   font-size: 13px;
   line-height: 1.5;
-  border: 4px solid var(--rule);
+  border: 3px solid var(--rule);
   padding: 12px;
   background: var(--paper);
   color: var(--ink);
   resize: vertical;
 }
 
-textarea:focus {
-  outline: 4px solid var(--warn);
+/* 焦点一律用 outline，不改边框宽度——改宽度会让布局跳动。
+   这是对 RawBlock「focus 改成 5px 边框」的一处刻意修正。 */
+:focus-visible {
+  outline: 3px solid var(--ink);
   outline-offset: 2px;
 }
 
@@ -554,8 +593,9 @@ textarea:focus {
 /* ── 提示条 ───────────────────────────────────────────── */
 
 .notice {
+  /* 左边 5px 是结构级的合法用法之一：强调条。其余三边是元素级。 */
   border: 3px solid var(--rule);
-  border-left-width: 10px;
+  border-left-width: 5px;
   padding: 10px 14px;
   font-size: 13px;
   margin-bottom: 16px;
@@ -580,7 +620,7 @@ textarea:focus {
 /* ── 图表 ─────────────────────────────────────────────── */
 
 .chart-box {
-  border: 4px solid var(--rule);
+  border: 5px solid var(--rule);
   padding: 12px;
   height: 320px;
   position: relative;
@@ -617,7 +657,7 @@ textarea:focus {
 .log {
   font-family: var(--font-mono);
   font-size: 12px;
-  border: 4px solid var(--rule);
+  border: 5px solid var(--rule);
   max-height: 620px;
   overflow: auto;
 }

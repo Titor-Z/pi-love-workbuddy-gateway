@@ -107,7 +107,7 @@
       <div class="value">{fmt.credit(today?.credit)}</div>
       <div class="sub">最近 {days} 天 {fmt.credit(totals.credit)}</div>
     </div>
-    <div class="stat accent">
+    <div class="stat hero">
       <div class="label"><span>剩余额度</span></div>
       <div class="value">{billing ? fmt.credit(billing.total_remain) : "—"}</div>
       <div class="sub">{billing ? `${billing.packages.length} 个资源包` : "读取中"}</div>
