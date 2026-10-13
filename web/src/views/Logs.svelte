@@ -8,13 +8,19 @@
   let onlyBlocked = $state(false);
   let onlyChat = $state(false);
   let view = $state("timeline"); // timeline | detail
+  let page = $state(1);
+
+  // 每页条数。列表不做内部滚动（外层页面已经是滚动容器，套两层会互相抢滚轮），
+  // 所以长列表靠分页。
+  const PAGE_SIZE = 50;
 
   async function load() {
     loading = true;
     error = "";
     try {
       // 倒序显示：最近的在上面。
-      events = (await api.events(300)).events.reverse();
+      // 一次取够再在前端分页：50 条一页，300 条只有 6 页太浅。
+      events = (await api.events(1000)).events.reverse();
     } catch (cause) {
       error = cause.message;
     }
@@ -23,6 +29,15 @@
 
   $effect(() => {
     load();
+  });
+
+  // 换筛选条件或换视图时回到第一页，否则会停在一个已经不存在的位置。
+  // 这个 effect 不读 page，所以不会自己触发自己。
+  $effect(() => {
+    void onlyChat;
+    void onlyBlocked;
+    void view;
+    page = 1;
   });
 
   const visible = $derived(
@@ -36,8 +51,20 @@
   // 明细表只列对话。其它事件（启动、续期）没有 token 和费用，
   // 混进来会留一堆空列，反而看不清想问的那件事。
   const chats = $derived(visible.filter((event) => event.kind === "chat"));
+  const pagedChats = $derived(chats.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
 
   const blockedTotal = $derived(events.filter((e) => e.blocked).length);
+
+  // 页码基数跟当前视图走：明细视图只列对话，时间线列全部。
+  const total = $derived(view === "detail" ? chats.length : visible.length);
+  const pageCount = $derived(Math.max(1, Math.ceil(total / PAGE_SIZE)));
+  const paged = $derived(visible.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
+
+  // 翻页后把列表顶端带进视野，否则翻完还在页面底部，看不出内容换了。
+  function goPage(next) {
+    page = Math.min(Math.max(1, next), pageCount);
+    document.querySelector(".section")?.scrollIntoView({ block: "start" });
+  }
 
   // 明细表底下的小结：只统计当前筛出来的这些。
   const summary = $derived.by(() => {
@@ -115,7 +142,7 @@
 
     {#if loading && chats.length === 0}
       <div class="empty">读取中…</div>
-    {:else if chats.length === 0}
+    {:else if pagedChats.length === 0}
       <div class="empty">没有符合条件的请求。</div>
     {:else}
       <div class="card tight">
@@ -133,7 +160,7 @@
             </tr>
           </thead>
           <tbody>
-            {#each chats as event, index (index)}
+            {#each pagedChats as event, index (index)}
               <tr>
                 <td class="num">{fmt.clock(event.t)}</td>
                 <td class="num">
@@ -176,7 +203,7 @@
       <div class="empty">没有符合条件的事件。</div>
     {:else}
       <div class="log">
-        {#each visible as event, index (index)}
+        {#each paged as event, index (index)}
           <div class="log-row" class:blocked={event.blocked}>
             <span class="t">{fmt.clock(event.t)}</span>
             <span class="kind">{fmt.kindLabel(event.kind)}</span>
@@ -185,6 +212,22 @@
         {/each}
       </div>
     {/if}
+  {/if}
+
+  {#if pageCount > 1}
+    <nav class="pager" aria-label="分页">
+      <button class="action" onclick={() => goPage(1)} disabled={page === 1}>首页</button>
+      <button class="action" onclick={() => goPage(page - 1)} disabled={page === 1}>上一页</button>
+      <span class="pager-info num">
+        第 {page} / {pageCount} 页 · 共 {total} 条
+      </span>
+      <button class="action" onclick={() => goPage(page + 1)} disabled={page === pageCount}>
+        下一页
+      </button>
+      <button class="action" onclick={() => goPage(pageCount)} disabled={page === pageCount}>
+        末页
+      </button>
+    </nav>
   {/if}
 </section>
 

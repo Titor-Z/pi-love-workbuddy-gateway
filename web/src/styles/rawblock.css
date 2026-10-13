@@ -239,12 +239,15 @@ pre {
   }
 }
 
+/* 品牌区**不画竖线**。
+   原来有一条 5px，但它紧贴着它右边那个导航项：当前页的反白块也是黑的，
+   两者一连起来就是一段 75px 的纯黑，看起来像「总览有个很粗的左边框」。
+   品牌本身已经足够区分（Archivo Black 17px + 带框的版本号），不需要再画线。 */
 .brand {
   font-family: var(--font-title);
   font-size: 17px;
   text-transform: uppercase;
   padding: 14px 20px;
-  border-right: 5px solid var(--rule);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -679,12 +682,28 @@ textarea {
 
 /* ── 日志 ─────────────────────────────────────────────── */
 
+/* 日志列表**不做内部滚动**。
+   外层页面已经是滚动容器，内层再套一个：滚轮到边界会卡住、
+   整页的滚动位置会被抢走，触控板上尤其难受。
+   长列表一律分页。 */
 .log {
   font-family: var(--font-mono);
   font-size: 12px;
   border: 5px solid var(--rule);
-  max-height: 620px;
-  overflow: auto;
+}
+
+/* 分页器。列表不做内部滚动，长列表一律靠它。 */
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.pager-info {
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .log-row {
@@ -723,10 +742,21 @@ textarea {
     width: 100%;
     padding: 8px 16px;
   }
-  .brand {
-    border-right: 0;
-  }
-  .log-row {
+  /* 分页器。列表不做内部滚动，长列表一律靠它。 */
+.pager {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.pager-info {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.log-row {
     grid-template-columns: 1fr;
     gap: 2px;
   }
