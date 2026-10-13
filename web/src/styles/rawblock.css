@@ -229,11 +229,6 @@ pre {
   -webkit-backdrop-filter: blur(14px);
 }
 
-/* 玻璃面板里的导航按钮自己不能是不透明的，否则会挡住背后那层模糊。 */
-.nav button {
-  background: transparent;
-}
-
 /* 有人把系统的「减少透明度」打开了，就别硬上——直接给实色。
    Apple 的可访问性清单里有这一条（design.md 第十一节）。 */
 @media (prefers-reduced-transparency: reduce) {
@@ -270,7 +265,15 @@ pre {
   flex-wrap: wrap;
 }
 
+/* 导航项之间**不画竖线**。两条理由：
+   1. 它已经有「反白填充」表达自己是个独立的格子（hover 反白、当前页反白）。
+      再画一条线是同一件事说两遍，而边框是本系统唯一的层级手段，说两遍就稀释了。
+   2. 竖线是 3px（元素级），顶栏底边是 5px（结构级）——同一个栏里两条线干同一件事
+      却不一样重，本身就是刻度混乱。
+   分隔靠间距与填充，不靠线。 */
 .nav button {
+  /* 玻璃面板里按钮自己不能是不透明的，否则会挡住背后那层模糊。 */
+  background: transparent;
   font-family: var(--font-body);
   font-size: 13px;
   font-weight: 700;
@@ -278,7 +281,6 @@ pre {
   letter-spacing: 0.8px;
   color: var(--ink);
   border: 0;
-  border-right: 3px solid var(--rule);
   padding: 0 22px;
   cursor: pointer;
 }
@@ -305,7 +307,6 @@ pre {
   font-family: var(--font-mono);
   font-size: 12px;
   text-transform: uppercase;
-  border-left: 3px solid var(--rule);
   gap: 8px;
 }
 
@@ -716,8 +717,8 @@ textarea {
   main {
     padding: 16px;
   }
+  /* 窄屏时状态区会换行，这时上边加一条线来分隔它和导航。 */
   .topbar .health {
-    border-left: 0;
     border-top: 3px solid var(--rule);
     width: 100%;
     padding: 8px 16px;
