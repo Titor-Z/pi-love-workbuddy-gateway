@@ -654,6 +654,15 @@ th.num {
   color: var(--invert-fg);
 }
 
+/* 限流：跟 blocked（红）和 promo（橙）都不是一回事——它不是内容问题，
+   是排队问题。用中性色 + 虚线边框，视觉上就该排在另两类后面。 */
+.tag.rate {
+  background: transparent;
+  color: var(--rule);
+  border-color: var(--rule);
+  border-style: dashed;
+}
+
 /* ── 控件 ─────────────────────────────────────────────── */
 
 /* 按钮的物理感：hover 浮起，按下沉回去。

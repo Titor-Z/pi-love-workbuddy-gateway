@@ -82,3 +82,52 @@ func TestClassifyTextIsHeuristic(t *testing.T) {
 		t.Error("带「我无法处理」的正常回答也应被标为疑似拒答")
 	}
 }
+
+// ---------- 限流判定 ----------
+
+func TestDetectRateLimit(t *testing.T) {
+	got := DetectRateLimit(6004, "您的使用量已超出频率限制，将在 2026-10-14 23:13:09 UTC+8 重置，您也可以切换其他模型继续使用。")
+	if !got.Limited {
+		t.Fatal("6004 应识别为限流")
+	}
+	if got.ResetAt != "2026-10-14 23:13:09 UTC+8" {
+		t.Errorf("重置时间提取不对：%q", got.ResetAt)
+	}
+}
+
+func TestDetectRateLimitRejectsOtherCodes(t *testing.T) {
+	// 内容策略码、普通错误码都不该被当成限流。
+	for _, code := range []int{11128, 40001, 500, 0} {
+		if got := DetectRateLimit(code, "将在 2026-10-14 23:13:09 UTC+8 重置"); got.Limited {
+			t.Errorf("code %d 不应识别为限流", code)
+		}
+	}
+}
+
+func TestExtractResetTimeTolerant(t *testing.T) {
+	cases := []struct {
+		msg  string
+		want string
+	}{
+		{"将在 2026-10-14 23:13:09 UTC+8 重置", "2026-10-14 23:13:09 UTC+8"},
+		{"将在2026-10-14 23:13:09重置", "2026-10-14 23:13:09"},
+		{"将在后续版本支持此功能", ""}, // 不是时间，宁可空也不要错
+		{"没有重置时间的限流文案", ""},
+	}
+	for i, c := range cases {
+		if got := extractResetTime(c.msg); got != c.want {
+			t.Errorf("用例 %d: %q 得到 %q，期望 %q", i, c.msg, got, c.want)
+		}
+	}
+}
+
+func TestRateLimitIsNotContentBlock(t *testing.T) {
+	// 这是最关键的一条：限流绝不能进内容拦截统计。
+	limit := DetectRateLimit(6004, "将在 2026-10-14 23:13:09 UTC+8 重置")
+	if !limit.Limited {
+		t.Fatal("6004 应判定为限流")
+	}
+	if v := FromPolicy(6004, ""); v.Blocked {
+		t.Error("6004 不应同时被判定为内容拦截，否则污染拦截率")
+	}
+}

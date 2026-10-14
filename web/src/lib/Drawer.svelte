@@ -141,6 +141,21 @@
           {/if}
         </section>
 
+        <!-- 限流 -->
+        {#if event.rate_limited}
+          <section class="block">
+            <div class="block-title">频率限制</div>
+            <dl class="kv">
+              <div><dt>模型</dt><dd>{event.model}</dd></div>
+              <div><dt>恢复时间</dt><dd class="reset">{event.rate_reset_at || "后端未给出"}</dd></div>
+            </dl>
+            <p class="note">
+              这不是内容拦截，是后端对<strong>单个模型</strong>的频率上限。可以等上面那个时间到，
+              或<strong>直接换一个模型</strong>继续用——其他模型不受影响。
+            </p>
+          </section>
+        {/if}
+
         <!-- 上游错误 -->
         {#if event.upstream}
           <section class="block">
@@ -295,6 +310,11 @@
     margin: auto;
     padding: 40px;
     color: var(--muted);
+  }
+
+  .kv dd.reset {
+    font-family: var(--mono);
+    color: var(--danger-ink);
   }
 
   @media (prefers-reduced-motion: reduce) {

@@ -88,6 +88,14 @@ type Record struct {
 	// 它与 Blocked 分栏：这是「猜的」，可能误报也可能漏报，绝不算进拦截率。
 	Refused bool `json:"refused,omitempty"`
 
+	// RateLimited 表示这次是被后端的用量/频率限制挡下（实测 code 6004）。
+	// 它与 Blocked 是两回事：限流是排队问题，不是内容审核，绝不进拦截率。
+	RateLimited bool `json:"rate_limited,omitempty"`
+
+	// RateResetAt 是后端给出的限流重置时间原文（形如 "2026-10-14 23:13:09 UTC+8"）。
+	// 这是用户最需要的信息——还要等多久。取不到时为空。
+	RateResetAt string `json:"rate_reset_at,omitempty"`
+
 	// RefuseRule 是触发拒答猜测的规则（命中的短语），未命中时为空。
 	RefuseRule string `json:"refuse_rule,omitempty"`
 

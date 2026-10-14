@@ -771,3 +771,49 @@ func TestChatResponseTextStoredOnRefusal(t *testing.T) {
 		t.Errorf("疑似拒答应留存回复正文，得到：%q", event.ResponseText)
 	}
 }
+
+// TestChatRateLimitRecorded 6004 限流要记为 rate_limited，取出重置时间，
+// 且**绝不能**被算成内容拦截——否则拦截率会被限流污染。
+func TestChatRateLimitRecorded(t *testing.T) {
+	backend := newFakeBackend(t)
+	backend.chatStatus = http.StatusTooManyRequests
+	backend.chatRaw = `{"code":6004,"msg":"您的使用量已超出频率限制，将在 2026-10-14 23:13:09 UTC+8 重置，您也可以切换其他模型继续使用。","requestId":"db3fcb46"}`
+	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+
+	postChat(t, handler, `{"model":"hy3","messages":[{"role":"user","content":"在吗"}]}`)
+
+	event := readLastChatEvent(t, journalPath)
+	if !event.RateLimited {
+		t.Error("6004 应记为限流")
+	}
+	if event.RateResetAt != "2026-10-14 23:13:09 UTC+8" {
+		t.Errorf("应取出重置时间，得到 %q", event.RateResetAt)
+	}
+	if event.Blocked {
+		t.Error("限流绝不能算成内容拦截，否则污染拦截率")
+	}
+	if event.Upstream == nil || event.Upstream.Code != 6004 {
+		t.Errorf("upstream 应记录 code 6004，得到 %+v", event.Upstream)
+	}
+	if event.RequestText != "" {
+		t.Error("限流不该留存请求正文——它不是内容拦截")
+	}
+}
+
+// TestChatRateLimitWithoutResetTime 限流文案里没有时间时，ResetAt 留空而不猜。
+func TestChatRateLimitWithoutResetTime(t *testing.T) {
+	backend := newFakeBackend(t)
+	backend.chatStatus = http.StatusTooManyRequests
+	backend.chatRaw = `{"code":6004,"msg":"太频繁了，请稍后再试"}`
+	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+
+	postChat(t, handler, `{"model":"hy3","messages":[{"role":"user","content":"hi"}]}`)
+
+	event := readLastChatEvent(t, journalPath)
+	if !event.RateLimited {
+		t.Error("6004 仍应识别为限流")
+	}
+	if event.RateResetAt != "" {
+		t.Errorf("取不到时间时应留空而不是猜一个，得到 %q", event.RateResetAt)
+	}
+}

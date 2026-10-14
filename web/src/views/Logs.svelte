@@ -9,6 +9,7 @@
   let loading = $state(true);
   let onlyBlocked = $state(false);
   let onlyRefused = $state(false);
+  let onlyRate = $state(false);
   let onlyChat = $state(false);
   let view = $state("timeline"); // timeline | detail
   let page = $state(1);
@@ -40,6 +41,8 @@
   $effect(() => {
     void onlyChat;
     void onlyBlocked;
+    void onlyRefused;
+    void onlyRate;
     void view;
     page = 1;
   });
@@ -48,6 +51,7 @@
     events.filter((event) => {
       if (onlyBlocked && !event.blocked) return false;
       if (onlyRefused && !event.refused) return false;
+      if (onlyRate && !event.rate_limited) return false;
       if (onlyChat && event.kind !== "chat") return false;
       return true;
     }),
@@ -75,7 +79,7 @@
 
   // 明细表底下的小结：只统计当前筛出来的这些。
   const summary = $derived.by(() => {
-    const total = { requests: chats.length, credit: 0, in: 0, out: 0, cached: 0, blocked: 0, refused: 0 };
+    const total = { requests: chats.length, credit: 0, in: 0, out: 0, cached: 0, blocked: 0, refused: 0, rateLimited: 0 };
     for (const event of chats) {
       total.credit += event.credit ?? 0;
       total.in += event.in ?? 0;
@@ -83,6 +87,7 @@
       total.cached += event.cached ?? 0;
       if (event.blocked) total.blocked++;
       if (event.refused) total.refused++;
+      if (event.rate_limited) total.rateLimited++;
     }
     total.cacheRate = total.in > 0 ? total.cached / total.in : 0;
     return total;
@@ -116,6 +121,9 @@
     <button class="action" aria-pressed={onlyRefused} onclick={() => (onlyRefused = !onlyRefused)}>
       只看疑似拒答
     </button>
+    <button class="action" aria-pressed={onlyRate} onclick={() => (onlyRate = !onlyRate)}>
+      只看限流
+    </button>
     <button class="action" onclick={load} disabled={loading}>刷新</button>
   </div>
 
@@ -130,7 +138,7 @@
       <div class="stat">
         <div class="label"><span>请求</span></div>
         <div class="value" style="font-size:24px">{summary.requests}</div>
-        <div class="sub">{summary.blocked} 次确定拦截 · {summary.refused} 次疑似拒答</div>
+        <div class="sub">{summary.blocked} 次确定拦截 · {summary.refused} 次疑似拒答 · {summary.rateLimited} 次限流</div>
       </div>
       <div class="stat">
         <div class="label"><span>合计消耗</span></div>
@@ -180,6 +188,7 @@
                   {event.model}
                   {#if event.blocked}<span class="tag blocked">拦截</span>{/if}
                   {#if event.refused}<span class="tag promo">拒答</span>{/if}
+                  {#if event.rate_limited}<span class="tag rate">限流</span>{/if}
                   {#if event.err}<span class="tag promo">失败</span>{/if}
                 </td>
                 <td class="num">{event.finish ?? "—"}</td>

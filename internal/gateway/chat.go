@@ -71,6 +71,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = json.Unmarshal(raw, &errBody)
 		policyVerdict := blocked.FromPolicy(errBody.Code, errBody.Msg)
+		// 限流与内容拦截是两回事：分别判定，日志里也分开放。
+		limit := blocked.DetectRateLimit(errBody.Code, errBody.Msg)
 		message := fmt.Sprintf("✗ HTTP %d | %s | %s", resp.StatusCode, modelName, msg)
 		s.logger.Printf("%s", message)
 
@@ -88,6 +90,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 			Status: resp.StatusCode, Millis: time.Since(started).Milliseconds(),
 			Message: message, Error: msg,
 			Blocked: policyVerdict.Blocked, BlockedReason: string(policyVerdict.Reason),
+			RateLimited: limit.Limited, RateResetAt: limit.ResetAt,
 			Upstream:    &journal.UpstreamError{HTTP: resp.StatusCode, Code: errBody.Code, Msg: errBody.Msg},
 			Request:     summarizeRequest(clientBody),
 			RequestText: reqText,
