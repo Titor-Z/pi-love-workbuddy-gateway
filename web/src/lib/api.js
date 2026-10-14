@@ -73,6 +73,10 @@ export const api = {
   unrevokeDevice: (id) => request("POST", `/api/devices/unrevoke?id=${encodeURIComponent(id)}`),
   resetRelayPSK: () => request("POST", "/api/relay/psk", { confirm: true }),
   setRelayEnabled: (enabled) => request("POST", "/api/relay/enable", { enable: enabled }),
+  sync: () => request("GET", "/api/sync"),
+  setSync: (enabled) => request("POST", "/api/sync", { enable: enabled, confirm: true }),
+  syncNow: () => request("POST", "/api/sync/now"),
+  switchCheck: () => request("GET", "/api/sync/switch-check"),
   stop: () => request("POST", "/api/control/stop"),
   restart: () => request("POST", "/api/control/restart"),
 };

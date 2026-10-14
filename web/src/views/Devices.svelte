@@ -5,6 +5,9 @@
 
   let relay = $state(null);
   let status = $state(null);
+  let sync = $state(null);
+  let switchCheck = $state(null);
+  let switching = $state(false);
   let error = $state("");
   let notice = $state("");
   let loading = $state(true);
@@ -16,7 +19,15 @@
     loading = true;
     error = "";
     try {
-      [relay, status] = await Promise.all([api.relay(), api.status()]);
+      const [relayPayload, statusPayload, syncPayload] = await Promise.all([
+        api.relay(),
+        api.status(),
+        // 客户端模式才有意义；网关模式下这个端点返回 501，忽略即可。
+        api.sync().catch(() => null),
+      ]);
+      relay = relayPayload;
+      status = statusPayload;
+      sync = syncPayload;
     } catch (cause) {
       error = cause.message;
     }
@@ -42,6 +53,43 @@
 
   function askToggle() {
     pending = { kind: relay?.enabled ? "disable" : "enable" };
+  }
+
+  async function syncNow() {
+    error = "";
+    notice = "";
+    try {
+      await api.syncNow();
+      notice = "已同步。";
+      await load();
+    } catch (cause) {
+      // 409 表示本机凭证比网关新——那是一次需要用户决定的事，
+      // 不是网络错误，所以把网关的原话直接显示出来。
+      error = cause instanceof ApiError ? cause.message : String(cause);
+    }
+  }
+
+  async function checkSwitch() {
+    switching = true;
+    error = "";
+    try {
+      switchCheck = await api.switchCheck();
+    } catch (cause) {
+      error = cause instanceof ApiError ? cause.message : String(cause);
+    }
+    switching = false;
+  }
+
+  async function toggleSync() {
+    error = "";
+    notice = "";
+    try {
+      await api.setSync(!sync?.enabled);
+      notice = sync?.enabled ? "已关闭凭证同步。" : "已开启凭证同步，重启网关后生效。";
+      await load();
+    } catch (cause) {
+      error = cause instanceof ApiError ? cause.message : String(cause);
+    }
   }
 
   async function run() {
@@ -116,6 +164,58 @@
     </div>
   {:else if !relay}
     <div class="notice">正在读取转发服务状态…</div>
+  {:else if sync}
+    <!-- 客户端模式：显示凭证同步状态与能否切回网关模式。 -->
+    <div class="card tight">
+      <p>
+        本机是<strong>客户端</strong>，凭证由网关同步过来、加密存在本机。
+        它只在切到网关模式时才被使用。
+      </p>
+      <table>
+        <tbody>
+          <tr>
+            <th style="width:200px">网关凭证版本</th>
+            <td class="num">epoch {sync.gateway_epoch ?? "—"}</td>
+          </tr>
+          <tr>
+            <th>本机凭证版本</th>
+            <td class="num">{sync.local ? `epoch ${sync.local.local_epoch}` : "尚无副本"}</td>
+          </tr>
+          <tr>
+            <th>上次同步</th>
+            <td class="num">
+              {sync.local?.last_sync_at ? fmt.time(sync.local.last_sync_at) : "—"}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="actions" style="margin-top:12px">
+        <button class="action" onclick={syncNow}>立即同步</button>
+        <button class="action" onclick={checkSwitch} disabled={switching}>
+          {switching ? "检查中…" : "检查能否切到网关模式"}
+        </button>
+      </div>
+      {#if switchCheck}
+        {#if switchCheck.can_switch}
+          <div class="notice" style="margin-top:12px">
+            可以切换。在客户端进程的终端里执行
+            <code class="copyable">-switch-to-gateway</code>，
+            它会用本机这份凭证写一份本地登录态，然后以
+            <code class="copyable">-mode gateway</code> 启动。
+          </div>
+        {:else}
+          <div class="notice warn" style="margin-top:12px">
+            {switchCheck.reason}
+          </div>
+        {/if}
+      {/if}
+    </div>
+
+    <div class="notice warn" style="margin-top:20px">
+      切到网关模式后，本机会<strong>开始自己刷新令牌</strong>。
+      回连局域网时若面板提示凭证冲突，说明网关那份更旧——由你选择用哪一份。
+      本机凭证比网关新时，同步不会覆盖它，也不会悄悄丢掉。
+    </div>
   {:else if !relay.enabled}
     <div class="card tight">
       <p>
@@ -217,6 +317,31 @@
       <strong>停用不是封禁。</strong>设备名是客户端自己报的，
       持有密钥的人换一个名字就能重连。所以<strong>无法只踢一台</strong>——
       要让人彻底连不上，只能重置密钥，代价是所有设备都要重新填入。
+    </div>
+
+    <div class="card tight" style="margin-top:20px">
+      <table>
+        <tbody>
+          <tr>
+            <th style="width:200px">凭证同步</th>
+            <td class="num">{sync?.enabled ? "已开启" : "已关闭（默认）"}</td>
+          </tr>
+          <tr>
+            <th>网关凭证版本</th>
+            <td class="num">epoch {sync?.gateway_epoch ?? "—"}</td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="actions" style="margin-top:12px">
+        <button class="action" onclick={toggleSync}>
+          {sync?.enabled ? "关闭凭证同步" : "开启凭证同步"}
+        </button>
+      </div>
+      <p class="dim" style="margin-top:12px">
+        开启后，局域网内持有网关密钥的设备可以<strong>取走你的账号令牌</strong>。
+        客户端把它加密存在自己机器上，用于外出时切到网关模式。
+        默认关闭：这是比「转发请求」敏感一个量级的操作。
+      </p>
     </div>
 
     <div class="actions" style="margin-top:20px">

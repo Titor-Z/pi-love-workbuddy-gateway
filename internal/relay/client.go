@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relaytls"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/upstream"
@@ -240,4 +241,37 @@ func normalizeBaseURL(raw string) (string, error) {
 			"请求正文会经过局域网，明文等于把账号与对话内容一起播出去", parsed.Scheme)
 	}
 	return strings.TrimSuffix(parsed.Scheme+"://"+parsed.Host+parsed.Path, "/"), nil
+}
+
+// FetchCredential 拉一份网关凭证。它实现 credentialsync.Source，
+// 因此同步器拿到的就是这条 TLS 通道。
+//
+// 网关未开放凭证同步时返回 403，错误信息由网关给足——
+// 那是用户唯一需要照着做的一步（去控制台开开关）。
+func (c *Client) Fetch(ctx context.Context) (credentialsync.Envelope, error) {
+	request, err := c.newRequest(ctx, http.MethodGet, credentialPath, nil)
+	if err != nil {
+		return credentialsync.Envelope{}, err
+	}
+	response, err := c.http.Do(request)
+	if err != nil {
+		return credentialsync.Envelope{}, translateError(err)
+	}
+	defer response.Body.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
+	if err != nil {
+		return credentialsync.Envelope{}, translateError(err)
+	}
+	if response.StatusCode == http.StatusForbidden {
+		return credentialsync.Envelope{}, errorsFromBody(response.StatusCode, raw)
+	}
+	if response.StatusCode != http.StatusOK {
+		return credentialsync.Envelope{}, errorsFromBody(response.StatusCode, raw)
+	}
+	var envelope credentialsync.Envelope
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return credentialsync.Envelope{}, fmt.Errorf("网关返回的凭证不是合法 JSON：%w", err)
+	}
+	return envelope, nil
 }

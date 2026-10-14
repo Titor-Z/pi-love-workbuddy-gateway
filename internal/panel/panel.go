@@ -14,6 +14,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/billing"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/devices"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/gateway"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
@@ -48,6 +49,9 @@ type Deps struct {
 	Mode string
 	// AuthFile / Credential / Billing 只在网关模式下非空。
 	AuthFile string
+
+	// Syncer 是客户端模式的凭证同步器；网关模式为 nil。
+	Syncer *credentialsync.Syncer
 
 	// RelayAddr / RelayEnabled / TLSFingerprint / PSKHint / Devices 描述转发服务，
 	// 只有网关模式才有。
@@ -135,6 +139,12 @@ func (p *Panel) Handler() http.Handler {
 	mux.HandleFunc("POST /api/relay/enable", p.guarded(p.handleEnableRelay))
 	mux.HandleFunc("POST /api/devices/revoke", p.guarded(p.handleRevokeDevice))
 	mux.HandleFunc("POST /api/devices/unrevoke", p.guarded(p.handleUnrevokeDevice))
+
+	// 凭证同步。同步开关只有网关模式有，立即同步与切换检查只有客户端模式有。
+	mux.HandleFunc("GET /api/sync", p.guarded(p.handleSync))
+	mux.HandleFunc("POST /api/sync", p.guarded(p.handleSetSync))
+	mux.HandleFunc("POST /api/sync/now", p.guarded(p.handleSyncNow))
+	mux.HandleFunc("GET /api/sync/switch-check", p.guarded(p.handleSwitchCheck))
 
 	mux.HandleFunc("POST /api/control/stop", p.guarded(p.handleStop))
 	mux.HandleFunc("POST /api/control/restart", p.guarded(p.handleRestart))

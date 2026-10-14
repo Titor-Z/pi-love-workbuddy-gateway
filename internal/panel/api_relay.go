@@ -5,9 +5,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/appdir"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/config"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/devices"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
 )
@@ -17,7 +19,11 @@ import (
 // 单独一个文件而不是塞进 config：它是会被面板改写的持久状态，
 // 而 config 是启动参数，两件事的写入时机与责任人不同。
 type relayPreference struct {
+	// Enabled 是转发开关（客户端能否连入并转发请求）。
 	Enabled bool `json:"enabled"`
+	// CredentialSync 是凭证同步开关（客户端能否取走账号令牌）。
+	// 独立一项：两者风险差一个量级，不该被同一个开关带过去。
+	CredentialSync bool `json:"credential_sync"`
 }
 
 // readRelayPreference 读出当前偏好；文件不存在或坏掉都当作未开启——
@@ -34,20 +40,29 @@ func readRelayPreference() bool {
 	return preference.Enabled
 }
 
-// setRelayEnabled 改偏好。写入失败要让用户知道，而不是默默不生效。
-func (p *Panel) setRelayEnabled(enabled bool) error {
-	raw, err := json.MarshalIndent(relayPreference{Enabled: enabled}, "", "  ")
+// writeRelayPreference 落盘偏好。先建目录：首次开启时目录可能还不存在。
+func writeRelayPreference(preference relayPreference) error {
+	raw, err := json.MarshalIndent(preference, "", "  ")
 	if err != nil {
 		return err
 	}
 	path := appdir.RelayPreferencePath()
-	// 目录可能还不存在（首次开启），os.WriteFile 不会自己建。
 	if dir := filepath.Dir(path); dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return err
 		}
 	}
 	return os.WriteFile(path, append(raw, '\n'), 0o644)
+}
+
+// setRelayEnabled 改转发开关，保留凭证同步那一项不被顺带清掉。
+func (p *Panel) setRelayEnabled(enabled bool) error {
+	var preference relayPreference
+	if raw, err := os.ReadFile(appdir.RelayPreferencePath()); err == nil {
+		_ = json.Unmarshal(raw, &preference)
+	}
+	preference.Enabled = enabled
+	return writeRelayPreference(preference)
 }
 
 // relayResponse 描述转发服务（局域网客户端接入的那个端口）的状态。
@@ -200,3 +215,124 @@ func (p *Panel) deviceCount() int {
 // panelReadRelayPreference 导给 main 用，避免它复制一份默认值的判断。
 // 转发服务是选择开启的功能，读不到、读坏了一律当作关闭。
 func PanelReadRelayPreference() bool { return readRelayPreference() }
+
+// ReadSyncPreference 读「是否允许下发凭证」开关。
+//
+// 与转发开关是两件事：转发是把请求送进来，下发凭证是把账号令牌交出去，
+// 后者风险高一个量级，必须让人分别想清楚。默认关；读不到或读坏了
+// 一律当作关闭——一个坏文件不该把账号令牌偷偷开放出去。
+func ReadSyncPreference() bool {
+	raw, err := os.ReadFile(appdir.RelayPreferencePath())
+	if err != nil {
+		return false
+	}
+	var preference relayPreference
+	if json.Unmarshal(raw, &preference) != nil {
+		return false
+	}
+	return preference.CredentialSync
+}
+
+// SetSyncPreference 改凭证同步开关，保留转发开关不被顺带清掉。
+func SetSyncPreference(enabled bool) error {
+	var preference relayPreference
+	if raw, err := os.ReadFile(appdir.RelayPreferencePath()); err == nil {
+		_ = json.Unmarshal(raw, &preference)
+	}
+	preference.CredentialSync = enabled
+	return writeRelayPreference(preference)
+}
+
+// syncResponse 是凭证同步的状态。
+type syncResponse struct {
+	Enabled      bool                  `json:"enabled"`
+	GatewayEpoch int64                 `json:"gateway_epoch"`
+	Local        *credentialsync.State `json:"local,omitempty"`
+}
+
+// handleSync 返回凭证同步开关与本机副本状态。
+func (p *Panel) handleSync(w http.ResponseWriter, _ *http.Request) {
+	response := syncResponse{Enabled: ReadSyncPreference()}
+	if epoch, err := credentialsync.ReadEpoch(appdir.CredentialEpochPath()); err == nil {
+		response.GatewayEpoch = epoch
+	}
+	if local, exists, err := credentialsync.Load(appdir.ClientCredentialPath()); err == nil && exists {
+		state := credentialsync.State{
+			LocalEpoch: local.Epoch,
+			LastSyncAt: local.SyncedAt,
+		}
+		response.Local = &state
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+// handleSetSync 改凭证同步开关。默认关，且开启前必须二次确认——
+// 这个开关交出的是账号令牌。
+func (p *Panel) handleSetSync(w http.ResponseWriter, r *http.Request) {
+	if !p.requireGatewayMode() {
+		writeError(w, http.StatusNotImplemented, "not_configured", "只有网关模式有凭证可下发")
+		return
+	}
+	var request struct {
+		Enable  bool `json:"enable"`
+		Confirm bool `json:"confirm"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&request)
+	if request.Enable && !request.Confirm {
+		writeError(w, http.StatusBadRequest, "confirm_required",
+			"开启后，局域网内持有网关密钥的设备可以取走你的账号令牌。"+
+				"确认请带上 \"confirm\": true")
+		return
+	}
+	if err := SetSyncPreference(request.Enable); err != nil {
+		p.fail(w, "修改凭证同步开关", err)
+		return
+	}
+	// 开关在下次启动生效：凭证源是在启动时装进 relay 的，
+	// 运行时增删意味着要处理正在进行的 TLS 会话。
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "enabled": request.Enable})
+}
+
+// handleSyncNow 客户端模式：立即同步一次。
+func (p *Panel) handleSyncNow(w http.ResponseWriter, r *http.Request) {
+	if p.deps.Syncer == nil {
+		writeError(w, http.StatusNotImplemented, "not_configured",
+			"只有客户端模式会同步凭证")
+		return
+	}
+	if err := p.deps.Syncer.Sync(r.Context()); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// SwitchChecker 由 main 注入：检查本机能否切到网关模式。
+//
+// 面板自己不做这个判断——那要读凭证副本并解密，而解密密钥在 runtime 那一层。
+// 注入一个函数比让面板反向依赖 runtime 干净。
+type SwitchChecker func() (canSwitch bool, reason string, epoch int64, syncedAt time.Time)
+
+// switchChecker 是注入的检查器；未注入时一律报告不能切。
+var switchChecker SwitchChecker
+
+// SetSwitchChecker 注入切换检查器。
+func SetSwitchChecker(checker SwitchChecker) { switchChecker = checker }
+
+// handleSwitchCheck 客户端模式：检查能否切到网关模式。
+//
+// 返回具体原因或空串。前端据此显示「差在哪一步」，
+// 而不是一句「无法切换」让用户无从下手。
+func (p *Panel) handleSwitchCheck(w http.ResponseWriter, _ *http.Request) {
+	if switchChecker == nil {
+		writeError(w, http.StatusNotImplemented, "not_configured", "本模式不支持切换")
+		return
+	}
+	canSwitch, reason, epoch, syncedAt := switchChecker()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"can_switch": canSwitch,
+		"reason":     reason,
+		"epoch":      epoch,
+		"synced_at":  syncedAt,
+	})
+}

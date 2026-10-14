@@ -11,6 +11,7 @@ import (
 
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/appdir"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/config"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/devices"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
 )
@@ -267,4 +268,127 @@ func revoke(t *testing.T, console *Panel, id string, revoked bool) int {
 	}
 	recorder := call(t, console, http.MethodPost, path, nil, nil)
 	return recorder.Code
+}
+
+// TestSyncToggleDefaultsOffAndRequiresConfirmation 凭证同步默认关，
+// 且开启必须二次确认——它交出的是账号令牌。
+func TestSyncToggleDefaultsOffAndRequiresConfirmation(t *testing.T) {
+	console, _, _ := newRelayPanel(t)
+
+	// 默认两个开关都是关的。
+	if PanelReadRelayPreference() || ReadSyncPreference() {
+		t.Fatal("两个开关都应当默认关闭")
+	}
+	// 开了转发不该顺带开启凭证同步——两者风险差一个量级。
+	if err := console.setRelayEnabled(true); err != nil {
+		t.Fatalf("开转发失败：%v", err)
+	}
+	if !PanelReadRelayPreference() {
+		t.Fatal("转发没开成")
+	}
+	if ReadSyncPreference() {
+		t.Error("开转发不该顺带开启凭证同步")
+	}
+	// 反向也一样：开同步不该把转发关掉。
+	if err := SetSyncPreference(true); err != nil {
+		t.Fatalf("开同步失败：%v", err)
+	}
+	if !ReadSyncPreference() {
+		t.Fatal("同步没开成")
+	}
+	if !PanelReadRelayPreference() {
+		t.Error("开同步不该把转发关掉")
+	}
+
+	// 端点层面：**开启**未确认必须 400，且不改动开关。
+	// 关闭不需要确认——关掉一个敏感开关不该有额外门槛。
+	recorder := call(t, console, http.MethodPost, "/api/sync",
+		map[string]any{"enable": false, "confirm": false}, nil)
+	if recorder.Code != http.StatusOK {
+		t.Errorf("关闭不需要确认，状态码 = %d", recorder.Code)
+	}
+	if ReadSyncPreference() {
+		t.Error("关闭没有生效")
+	}
+
+	recorder = call(t, console, http.MethodPost, "/api/sync",
+		map[string]any{"enable": true, "confirm": false}, nil)
+	if recorder.Code != http.StatusBadRequest {
+		t.Errorf("开启未确认时状态码 = %d，期望 400", recorder.Code)
+	}
+	if ReadSyncPreference() {
+		t.Error("未确认的开启请求把开关改掉了")
+	}
+
+	recorder = call(t, console, http.MethodPost, "/api/sync",
+		map[string]any{"enable": true, "confirm": true}, nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("确认后开启状态码 = %d，期望 200", recorder.Code)
+	}
+	if !ReadSyncPreference() {
+		t.Error("确认后仍没有开启")
+	}
+}
+
+// TestSyncEndpointReportsGatewayAndLocalEpoch 面板要能同时看到两边版本，
+// 否则用户没法判断「该用哪一份」。
+func TestSyncEndpointReportsGatewayAndLocalEpoch(t *testing.T) {
+	console, _, dir := newRelayPanel(t)
+	if err := os.MkdirAll(filepath.Dir(appdir.CredentialEpochPath()), 0o700); err != nil {
+		t.Fatalf("建目录失败：%v", err)
+	}
+	if err := os.WriteFile(appdir.CredentialEpochPath(), []byte("12\n"), 0o600); err != nil {
+		t.Fatalf("写 epoch 失败：%v", err)
+	}
+	if err := credentialsync.Save(appdir.ClientCredentialPath(), credentialsync.LocalFile{
+		Epoch:      7,
+		Credential: map[string]any{"auth": map[string]any{"accessToken": "sealed"}},
+	}); err != nil {
+		t.Fatalf("写副本失败：%v", err)
+	}
+
+	recorder := call(t, console, http.MethodGet, "/api/sync", nil, nil)
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("响应不是 JSON：%v", err)
+	}
+	if payload["gateway_epoch"].(float64) != 12 {
+		t.Errorf("网关 epoch = %v，期望 12", payload["gateway_epoch"])
+	}
+	local := payload["local"].(map[string]any)
+	if local["local_epoch"].(float64) != 7 {
+		t.Errorf("本机 epoch = %v，期望 7", local["local_epoch"])
+	}
+	_ = dir
+}
+
+// TestSwitchCheckWithoutChecker 没注入检查器时不能假装可以切。
+func TestSwitchCheckWithoutChecker(t *testing.T) {
+	console, _, _ := newRelayPanel(t)
+	SetSwitchChecker(nil)
+	recorder := call(t, console, http.MethodGet, "/api/sync/switch-check", nil, nil)
+	if recorder.Code != http.StatusNotImplemented {
+		t.Errorf("状态码 = %d，期望 501", recorder.Code)
+	}
+}
+
+// TestSwitchCheckReportsReason 四种被拒原因都要能传到前端。
+func TestSwitchCheckReportsReason(t *testing.T) {
+	console, _, _ := newRelayPanel(t)
+	SetSwitchChecker(func() (bool, string, int64, time.Time) {
+		return false, "凭证已过期，请先连回网关同步新的", 3, time.Now()
+	})
+	defer SetSwitchChecker(nil)
+
+	recorder := call(t, console, http.MethodGet, "/api/sync/switch-check", nil, nil)
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("响应不是 JSON：%v", err)
+	}
+	if payload["can_switch"].(bool) {
+		t.Error("不满足条件时不该报告可以切")
+	}
+	if payload["reason"] != "凭证已过期，请先连回网关同步新的" {
+		t.Errorf("原因没有传到前端：%v", payload["reason"])
+	}
 }

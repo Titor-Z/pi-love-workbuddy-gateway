@@ -87,6 +87,12 @@ func run(args []string) error {
 	}
 	// 配对要早于派生：它是一次性动作，结果要在前台打印给用户看，
 	// 派生之后就没人能读到那行输出了。
+	// 切到网关模式与「只同步一次」要在前台做完：它们要么写一份本地登录态，
+	// 要么把结果打印给用户看。派生到后台之后这些输出就没人读得到了。
+	// 排在配对之前：-trust 常与 -sync-now 一起用来「认一次 + 同步」。
+	if cfg.SwitchToGateway || cfg.SyncOnly {
+		return runSwitchToGateway(cfg)
+	}
 	if cfg.Mode == config.ModeClient && (cfg.Probe || cfg.Trust != "") {
 		return runPairing(cfg)
 	}
@@ -158,6 +164,7 @@ func runServe(cfg *config.Config, args []string) error {
 		PSKHint:        parts.pskHint(),
 		Devices:        parts.devices,
 		Device:         parts.device,
+		Syncer:         parts.syncer,
 		AuthFile:       parts.authFile,
 		ListenAddr:     cfg.ListenAddr,
 		ConsoleAddr:    cfg.ConsoleAddr,
@@ -243,6 +250,18 @@ func runServe(cfg *config.Config, args []string) error {
 
 	events.Append(journal.Record{Kind: journal.KindStart, Version: version,
 		Message: fmt.Sprintf("启动 %s，监听 %s", version, cfg.ListenAddr)})
+
+	// 客户端模式：后台同步凭证。网关模式没有这一步——凭证本来就在本机。
+	if parts.syncer != nil {
+		go runCredentialSync(ctx, parts.syncer, logger, events)
+		panel.SetSwitchChecker(func() (bool, string, int64, time.Time) {
+			problem, file, _, err := CheckSwitchToGateway()
+			if err != nil {
+				return false, err.Error(), file.Epoch, file.SyncedAt
+			}
+			return problem == problemNone, problem.String(), file.Epoch, file.SyncedAt
+		})
+	}
 
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- apiServer.ListenAndServe() }()

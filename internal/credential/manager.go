@@ -411,3 +411,32 @@ func number(obj map[string]any, key string) float64 {
 	}
 	return 0
 }
+
+// Export 返回**解密后**的登录态文档，供凭证同步下发给客户端。
+//
+// 为什么是明文而不是原样的加密信封：atRestSecretKey 绑定在本机，
+// 客户端机器没有那把密钥，信封搬过去也解不开。所以只能交明文，
+// 由客户端落地时用它自己的密钥重新封装。
+//
+// 明文只在 TLS 通道内流动，不写任何磁盘。调用方必须保证这一点。
+func (m *Manager) Export() (map[string]any, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	doc, err := m.loadLocked()
+	if err != nil {
+		return nil, err
+	}
+	auth := authSection(doc)
+	for _, key := range []string{"accessToken", "refreshToken"} {
+		plain, err := m.cipher.Decrypt(auth[key])
+		if err != nil {
+			return nil, fmt.Errorf("导出前解密 %s 失败：%w", key, err)
+		}
+		if plain == "" {
+			continue
+		}
+		auth[key] = plain
+	}
+	return doc, nil
+}

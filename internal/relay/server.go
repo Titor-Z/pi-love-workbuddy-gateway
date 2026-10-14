@@ -14,7 +14,10 @@ package relay
 
 import (
 	"net/http"
+	"reflect"
 	"strings"
+
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
 )
 
 const (
@@ -29,12 +32,22 @@ const (
 // pingPath 让客户端不必发一次真实请求就能确认网关在不在、指纹对不对。
 const pingPath = "/relay/v1/ping"
 
+// credentialPath 是凭证同步端点。
+//
+// 它返回的是账号令牌，比转发请求敏感一个量级，因此有三重保护：
+// 独立开关（默认关，见 CredentialSource 为 nil 时的行为）、PSK、TLS 指纹。
+const credentialPath = "/relay/v1/credential"
+
 // Deps 是 relay 服务端的依赖。
 type Deps struct {
 	// Backend 接收通过鉴权的请求。生产里它就是网关自己的 Handler——
 	// 两者同进程，直接挂过去，不做 HTTP 反代：少一跳，也少一次可能破坏
 	// SSE 的缓冲。
 	Backend http.Handler
+	// CredentialSource 提供凭证同步。为 nil 时该端点一律 403——
+	// 这个端点返回的是账号令牌，比转发请求敏感一个量级，
+	// 必须由用户在控制台显式开启。
+	CredentialSource CredentialSource
 	// Devices 登记到访设备；为 nil 时不登记（仍然校验 PSK）。
 	Devices DeviceRegistry
 	PSK     string
@@ -74,6 +87,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET "+pingPath, s.authorized(s.handlePing))
 	mux.Handle("/v1/", s.authorized(s.forward()))
+	mux.HandleFunc("GET "+credentialPath, s.authorized(s.handleCredential))
 	return mux
 }
 
@@ -124,4 +138,32 @@ func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {
 		"version":  s.deps.Version,
 		"protocol": ProtocolVersion,
 	})
+}
+
+// CredentialSource 是网关侧提供凭证的能力。抽成接口是为了让测试不必
+// 真的构造一个 credential.Manager。
+type CredentialSource interface {
+	// CredentialEnvelope 返回要下发的凭证，以及网关侧的 epoch。
+	CredentialEnvelope() (credentialsync.Envelope, error)
+}
+
+// handleCredential 下发凭证。
+//
+// 关着的时候返回 403 而不是 404：404 会让客户端以为地址写错了，
+// 而真正的原因是「网关没允许同步」。说清楚差别能省一轮排查。
+func (s *Server) handleCredential(w http.ResponseWriter, r *http.Request) {
+	// 用反射排除「类型化的 nil」：传了 (*T)(nil) 时接口本身非空，
+	// 直接判等会漏过去，然后在调用时 panic——那会让整个连接断掉。
+	if s.deps.CredentialSource == nil || reflect.ValueOf(s.deps.CredentialSource).IsNil() {
+		writeRelayError(w, http.StatusForbidden, "credential_sync_disabled",
+			"网关未开放凭证同步。请在网关控制台「多设备」页开启。"+
+				"这个端点会交出你的账号令牌，默认必须是关的。")
+		return
+	}
+	envelope, err := s.deps.CredentialSource.CredentialEnvelope()
+	if err != nil {
+		writeRelayError(w, http.StatusInternalServerError, "credential_unavailable", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope)
 }

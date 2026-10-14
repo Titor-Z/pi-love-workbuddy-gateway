@@ -31,6 +31,20 @@ const JournalFileName = "gateway.jsonl"
 // 换文件名比引文件锁简单得多，也让「切换模式」这件事天然可解释。
 const ClientJournalFileName = "client.jsonl"
 
+// CredentialEpochFileName 是网关侧的同步计数器。
+//
+// 单独一个文件，不放进 devices.json（那张表是观测记录，会被删了重来）
+// 也不放进 relay.json（那是面板改的偏好）。删掉它 = 用户主动重置。
+const CredentialEpochFileName = "credential-epoch"
+
+// ClientCredentialFileName 是客户端本地的凭证副本。
+// 权限 0600：它间接持有账号访问权。
+const ClientCredentialFileName = "credentials.json"
+
+// ClientAtRestFileName 是客户端自己的 at-rest 密钥。
+// 与网关那套完全无关——它只加密本机的凭证副本。
+const ClientAtRestFileName = "at-rest-secret"
+
 // DeviceFileName 是本设备身份文件。设备 ID 与运行模式无关：
 // 同一台机器切网关 / 客户端是同一个身份，否则网关的设备表会分裂出两个条目。
 const DeviceFileName = "device.json"
@@ -86,6 +100,22 @@ func JournalPath() string { return join(Dir(), JournalFileName) }
 // ClientJournalPath 返回客户端模式下事件文件的默认路径。
 // 与网关模式分开，两者互不干扰，也无需跨进程加锁。
 func ClientJournalPath() string { return join(Dir(), ClientJournalFileName) }
+
+// CredentialEpochPath 返回同步计数器文件路径。
+func CredentialEpochPath() string { return join(Dir(), CredentialEpochFileName) }
+
+// ClientCredentialPath 返回客户端凭证副本路径。
+func ClientCredentialPath() string { return join(Dir(), ClientCredentialFileName) }
+
+// LocalAuthFileName 是客户端切到网关模式后写的本地登录态文件名。
+const LocalAuthFileName = "workbuddy-desktop.info"
+
+// LocalAuthPath 返回客户端切到网关模式后的登录态路径。
+// 与 WorkBuddy 客户端同名，credential.Locate 能直接探测到它。
+func LocalAuthPath() string { return join(Dir(), LocalAuthFileName) }
+
+// ClientAtRestPath 返回客户端自己的 at-rest 密钥路径。
+func ClientAtRestPath() string { return join(Dir(), ClientAtRestFileName) }
 
 // DevicePath 返回本设备身份文件的路径。
 func DevicePath() string { return join(Dir(), DeviceFileName) }

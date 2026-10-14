@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/appdir"
 )
 
 // envAuthDir 是指定登录态目录的环境变量名。
@@ -45,27 +47,32 @@ func Locate(explicit string) (string, error) {
 }
 
 // candidateDirs 按平台给出登录态目录的候选列表。
+//
+// 本项目的配置目录排在第一位：客户端切到网关模式后，登录态写在那里
+// （见 appdir.LocalAuthPath）。它本该优先于桌面端的目录——同一台机器上
+// 若两份都存在，说明用户刚切过模式，该用网关自己那份。
 func candidateDirs() []string {
 	if dir := os.Getenv(envAuthDir); dir != "" {
 		return []string{dir}
 	}
+	candidates := []string{appdir.Dir()}
 	home, _ := os.UserHomeDir()
 	switch runtime.GOOS {
 	case "darwin":
-		return []string{filepath.Join(home, "Library", "Application Support",
-			"CodeBuddyExtension", "Data", "Public", "auth")}
+		return append(candidates, filepath.Join(home, "Library", "Application Support",
+			"CodeBuddyExtension", "Data", "Public", "auth"))
 	case "windows":
 		local := os.Getenv("LOCALAPPDATA")
 		if local == "" {
 			local = filepath.Join(home, "AppData", "Local")
 		}
-		return []string{filepath.Join(local, "CodeBuddyExtension", "Data", "Public", "auth")}
+		return append(candidates, filepath.Join(local, "CodeBuddyExtension", "Data", "Public", "auth"))
 	default:
 		xdg := os.Getenv("XDG_DATA_HOME")
 		if xdg == "" {
 			xdg = filepath.Join(home, ".local", "share")
 		}
-		return []string{filepath.Join(xdg, "CodeBuddyExtension", "Data", "Public", "auth")}
+		return append(candidates, filepath.Join(xdg, "CodeBuddyExtension", "Data", "Public", "auth"))
 	}
 }
 

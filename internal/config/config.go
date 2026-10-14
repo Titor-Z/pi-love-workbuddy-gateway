@@ -49,6 +49,11 @@ type Config struct {
 	Probe bool
 	// Trust 是要确认为可信的网关证书指纹，通常与 -gateway 一起用一次。
 	Trust string
+	// SwitchToGateway 为真时把本机从客户端模式切成网关模式：
+	// 用已同步的凭证副本写一份本地登录态，然后退出。
+	SwitchToGateway bool
+	// SyncOnly 只同步一次凭证就退出，用于出门前手动刷新。
+	SyncOnly bool
 
 	// ConsoleAddr 是 Web 控制台的监听地址，形如 127.0.0.1:8789。
 	// v0.3.0 起控制台不再与 API 共用端口：控制台含余额、请求日志与停止/重启，
@@ -102,6 +107,10 @@ func Parse(args []string, errOut io.Writer) (*Config, error) {
 	fs.StringVar(&cfg.DeviceName, "device-name", "", "本设备名称，默认取主机名")
 	fs.BoolVar(&cfg.Probe, "probe", false, "（客户端模式）取网关证书指纹并打印，退出")
 	fs.StringVar(&cfg.Trust, "trust", "", "（客户端模式）确认为可信的网关证书指纹")
+	fs.BoolVar(&cfg.SwitchToGateway, "switch-to-gateway", false,
+		"（客户端模式）用已同步的凭证切到网关模式")
+	fs.BoolVar(&cfg.SyncOnly, "sync-now", false,
+		"（客户端模式）立即同步一次凭证然后退出")
 	fs.BoolVar(&cfg.Daemon, "d", true, "后台运行（脱离终端）；在终端里看日志请用 serve 子命令或 -d=false")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
@@ -127,7 +136,9 @@ func Parse(args []string, errOut io.Writer) (*Config, error) {
 			return nil, fmt.Errorf("网关模式不需要 -gateway，那个参数说的是客户端要去连谁")
 		}
 	case ModeClient:
-		if cfg.GatewayURL == "" {
+		// 切到网关模式是**本地**操作：读的是已经同步下来的副本，
+		// 不需要连网关。所以这一项不能要 -gateway。
+		if cfg.GatewayURL == "" && !cfg.SwitchToGateway {
 			return nil, fmt.Errorf("客户端模式必须用 -gateway 指定网关地址")
 		}
 		// 客户端不持有凭证，也不提供转发服务；这几个参数在这边没有意义。
