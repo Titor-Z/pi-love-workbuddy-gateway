@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,6 +16,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/devices"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/netif"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/paircode"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/pairing"
 )
 
@@ -80,10 +82,14 @@ type relayResponse struct {
 	// Addresses 是**真正可连的**地址列表（每块局域网网卡一个）。
 	// 客户端要照着这个填：0.0.0.0 是填不了的，那是「本机所有网卡」的意思，
 	// 不是任何一个可以连过去的地址。
-	Addresses   []string        `json:"addresses"`
-	Fingerprint string          `json:"fingerprint"`
-	PSKHint     string          `json:"psk_hint,omitempty"`
-	Devices     []devices.Entry `json:"devices"`
+	Addresses   []string `json:"addresses"`
+	Fingerprint string   `json:"fingerprint"`
+	PSKHint     string   `json:"psk_hint,omitempty"`
+	// PairCode 是当前有效的短配对码（形如 4F7-K92）；没有或已过期时为空。
+	// 它本身不是长期凭据——5 分钟、一次性、错 10 次作废。
+	PairCode        string          `json:"pair_code,omitempty"`
+	PairCodeExpires string          `json:"pair_code_expires_at,omitempty"`
+	Devices         []devices.Entry `json:"devices"`
 }
 
 // reachableAddrs 把监听地址翻译成客户端能真正连上的地址。
@@ -118,7 +124,57 @@ func (p *Panel) handleRelay(w http.ResponseWriter, _ *http.Request) {
 	if p.deps.RelayEnabled && p.deps.Devices != nil {
 		response.Devices = p.deps.Devices.List()
 	}
+	if p.deps.RelayEnabled && p.deps.PairingCodes != nil {
+		if value, expiresAt := p.deps.PairingCodes.Current(); value != "" {
+			response.PairCode = paircode.Format(value)
+			response.PairCodeExpires = expiresAt.Format(time.RFC3339)
+		}
+	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+// handleIssuePairCode 生成一个新的短配对码，并作废此前那个。
+//
+// 这是「简单配对」的入口：用户在网关这边点一下，控制台显示 6 位短码，
+// 拿到另一台机器填进去即可——不用抄那 43 位的长密钥。
+func (p *Panel) handleIssuePairCode(w http.ResponseWriter, _ *http.Request) {
+	if !p.requireGatewayMode() {
+		writeError(w, http.StatusNotImplemented, "not_configured", "客户端模式不产生配对码")
+		return
+	}
+	if !p.deps.RelayEnabled || p.deps.PairingCodes == nil {
+		writeError(w, http.StatusConflict, "not_configured", "转发服务未开启，配对码无从生效")
+		return
+	}
+	value, expiresAt, err := p.deps.PairingCodes.Issue()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal", err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"pair_code":            paircode.Format(value),
+		"pair_code_expires_at": expiresAt.Format(time.RFC3339),
+	})
+}
+
+// handleRevealPSK 按需返回完整的网关密钥。
+//
+// 为什么是 POST：它是一次**刻意的动作**，不该被浏览器预取、被历史记录，
+// 也不该出现在任何日志或缓存里。前端点「显示密钥」才调它。
+//
+// 面板本来就能读到 psk.txt（同一个用户、同一台机器、文件权限 0600），
+// 所以这里不构成新的攻击面；跨站脚本也拿不到——它读不到我们返回的 HTML
+// （同源策略），也给表单加不了自定义请求头。
+func (p *Panel) handleRevealPSK(w http.ResponseWriter, _ *http.Request) {
+	if !p.requireGatewayMode() {
+		writeError(w, http.StatusNotImplemented, "not_configured", "客户端模式没有网关密钥")
+		return
+	}
+	if p.deps.PSK == "" {
+		writeError(w, http.StatusNotFound, "not_configured", "转发服务未开启，还没有密钥")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"psk": p.deps.PSK})
 }
 
 // handleRevokeDevice 停用一台设备。
@@ -394,10 +450,8 @@ func (p *Panel) handleSwitchCheck(w http.ResponseWriter, _ *http.Request) {
 
 // pairingRequest 是配对表单提交的内容。
 type pairingRequest struct {
-	// Address 是网关地址，形如 192.168.1.5:8790（协议可省略）。
+	// Address 是网关地址，形如 192.168.1.5:8788（协议可省略）。
 	Address string `json:"address"`
-	// PSK 是网关控制台显示的那串密钥。
-	PSK string `json:"psk"`
 }
 
 // pairingResponse 告诉前端下一步该做什么。
@@ -433,26 +487,18 @@ func (p *Panel) handlePairingProbe(w http.ResponseWriter, r *http.Request) {
 	address := pairing.NormalizeAddress(request.Address)
 	if address == "" || strings.ContainsAny(request.Address, "/?") {
 		writeJSON(w, http.StatusOK, pairingResponse{
-			Error: "网关地址只能是「主机:端口」，形如 192.168.1.5:8790",
+			Error: "网关地址只能是「主机:端口」，形如 192.168.1.5:8788",
 		})
 		return
 	}
-	if strings.TrimSpace(request.PSK) == "" {
-		writeJSON(w, http.StatusOK, pairingResponse{Error: "请填入网关控制台显示的密钥"})
-		return
-	}
 
-	// 先落一份「未确认指纹」的配对，让后续连接能带着密钥过去验。
-	// 指纹留空：此时还不该信任任何证书。
-	provisional := pairing.Info{URL: address, PSK: strings.TrimSpace(request.PSK)}
+	// 这一步**不要任何凭据**：只把网关的证书指纹取回来给用户看。
+	// 顺序很重要——用户在比对过指纹之前，不该先把密钥或配对码交给对方，
+	// 否则一个冒充者可以在验证之前就把凭据收走。
+	// 也正因为不落盘，比对之前本机不持有任何指向该网关的信任。
 	fingerprint, err := probeFingerprint(address)
 	if err != nil {
 		writeJSON(w, http.StatusOK, pairingResponse{Error: err.Error()})
-		return
-	}
-	provisional.Fingerprint = ""
-	if err := p.savePairing(provisional); err != nil {
-		p.fail(w, "保存配对信息", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, pairingResponse{
@@ -469,7 +515,10 @@ func (p *Panel) handlePairingConfirm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request struct {
-		Address     string `json:"address"`
+		Address string `json:"address"`
+		// Code 是网关控制台显示的 6 位短配对码。
+		Code string `json:"code"`
+		// PSK 是长密钥，保留给不想走短码的人直接粘贴。
 		PSK         string `json:"psk"`
 		Fingerprint string `json:"fingerprint"`
 	}
@@ -481,10 +530,29 @@ func (p *Panel) handlePairingConfirm(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "bad_request", "缺少要确认的指纹")
 		return
 	}
+	address := pairing.NormalizeAddress(request.Address)
+	fingerprint := pairing.NormalizeFingerprint(request.Fingerprint)
+
+	psk := strings.TrimSpace(request.PSK)
+	if code := strings.TrimSpace(request.Code); code != "" {
+		// 短码换长密钥。指纹已经钉在这一次连接上，中途换人冒充会握手失败。
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		exchanged, err := redeemPairCode(ctx, address, fingerprint, code)
+		if err != nil {
+			writeError(w, http.StatusBadGateway, "pairing_failed", err.Error())
+			return
+		}
+		psk = exchanged
+	}
+	if psk == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "请填入配对码或网关密钥")
+		return
+	}
 	info := pairing.Info{
-		URL:         pairing.NormalizeAddress(request.Address),
-		PSK:         strings.TrimSpace(request.PSK),
-		Fingerprint: pairing.NormalizeFingerprint(request.Fingerprint),
+		URL:         address,
+		PSK:         psk,
+		Fingerprint: fingerprint,
 	}
 	if err := p.savePairing(info); err != nil {
 		p.fail(w, "保存配对信息", err)
@@ -501,6 +569,21 @@ func (p *Panel) savePairing(info pairing.Info) error {
 
 // requireClientMode 是客户端模式专属接口的前置。
 func (p *Panel) requireClientMode() bool { return p.deps.Mode == config.ModeClient }
+
+// redeemPairCode 由 main 注入，把一次性短码换成长期密钥。
+//
+// 与 probeFingerprint 同样注入的理由：它要建 TLS 连接，
+// 而建连接的细节在 relaytls 那一层，面板不该知道。
+var redeemPairCode = func(ctx context.Context, address, fingerprint, code string) (string, error) {
+	return "", fmt.Errorf("当前模式不支持配对")
+}
+
+// SetRedeemPairCode 注入配对码兑换实现。
+func SetRedeemPairCode(fn func(context.Context, string, string, string) (string, error)) {
+	if fn != nil {
+		redeemPairCode = fn
+	}
+}
 
 // probeFingerprint 由 main 注入：它要建 TLS 连接，
 // 而建连接的细节在 relaytls 那一层，面板不该知道。

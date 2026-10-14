@@ -34,7 +34,8 @@ func newRelayPanel(t *testing.T) (*Panel, *devices.Registry, string) {
 		RelayEnabled:   true,
 		RelayAddr:      "0.0.0.0:8790",
 		TLSFingerprint: "aa:bb",
-		PSKHint:        "abcd…（共 44 位）",
+		PSK:            "SUPER-SECRET-PSK-VALUE",
+		PSKHint:        "SUPE…（共 22 位）",
 		Devices:        registry,
 		ListenAddr:     "127.0.0.1:8788",
 		Logger:         newTestLogger(t),
@@ -74,7 +75,7 @@ func TestRelayStatusNeverLeaksPSK(t *testing.T) {
 	if strings.Contains(recorder.Body.String(), "SUPER-SECRET") {
 		t.Fatal("响应里出现了密钥原文")
 	}
-	if !strings.Contains(recorder.Body.String(), "abcd…") {
+	if !strings.Contains(recorder.Body.String(), "SUPE…") {
 		t.Errorf("没有给出便于核对的密钥提示：%s", recorder.Body.String())
 	}
 	if !strings.Contains(recorder.Body.String(), "aa:bb") {
@@ -408,15 +409,34 @@ func TestPairingProbeRejectsBadInput(t *testing.T) {
 		body    map[string]any
 		wantSub string
 	}{
-		{"带路径的地址", map[string]any{"address": "h:8790/x", "psk": "k"}, "主机:端口"},
-		{"缺密钥", map[string]any{"address": "h:8790"}, "密钥"},
-		{"地址为空", map[string]any{"address": "", "psk": "k"}, "主机:端口"},
+		{"带路径的地址", map[string]any{"address": "h:8788/x"}, "主机:端口"},
+		{"地址为空", map[string]any{"address": ""}, "主机:端口"},
 	}
 	for _, testCase := range cases {
 		recorder := call(t, console, http.MethodPost, "/api/pairing/probe", testCase.body, nil)
 		if !strings.Contains(recorder.Body.String(), testCase.wantSub) {
 			t.Errorf("%s：响应没有说明原因：%s", testCase.name, recorder.Body.String())
 		}
+	}
+}
+
+// TestPairingProbeNeedsNoCredential 探测这一步**不要任何凭据**。
+//
+// 顺序很重要：用户必须先看到指纹并比对，之后才该把配对码交出去。
+// 如果探测就要密钥，冒充者可以在验证之前把凭据收走。
+func TestPairingProbeNeedsNoCredential(t *testing.T) {
+	console, _, _ := newRelayPanel(t)
+	console.deps.Mode = config.ModeClient
+	SetProbeFingerprint(func(string) (string, error) { return "aa:bb", nil })
+	defer SetProbeFingerprint(nil)
+
+	recorder := call(t, console, http.MethodPost, "/api/pairing/probe",
+		map[string]any{"address": "192.168.1.5:8788"}, nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d，期望 200", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "aa:bb") {
+		t.Errorf("没有带密钥就没有给出指纹：%s", recorder.Body.String())
 	}
 }
 
@@ -529,5 +549,51 @@ func TestSwitchExecuteSuccessTellsUserToRestart(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "重新启动") {
 		t.Errorf("没有提示要重启：%s", recorder.Body.String())
+	}
+}
+
+// TestRevealPSKReturnsFullKey 面板能按需给出完整密钥。
+//
+// 「看不全」本身就是缺陷：密钥只显示前四位的话，用户根本没法把它填进客户端。
+// 列表接口不返回它（避免被轮询反复拉走），但专用接口必须给全。
+func TestRevealPSKReturnsFullKey(t *testing.T) {
+	console, _, _ := newRelayPanel(t)
+
+	// 列表接口仍然不给原文。
+	listing := call(t, console, http.MethodGet, "/api/relay", nil, nil)
+	if strings.Contains(listing.Body.String(), "SUPER-SECRET") {
+		t.Fatal("列表接口泄漏了密钥原文")
+	}
+
+	recorder := call(t, console, http.MethodPost, "/api/relay/psk/reveal", nil, nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d，期望 200", recorder.Code)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("响应不是 JSON：%v", err)
+	}
+	if payload["psk"] != "SUPER-SECRET-PSK-VALUE" {
+		t.Errorf("返还的密钥 = %q，期望完整原文", payload["psk"])
+	}
+}
+
+// TestRevealPSKRefusedInClientMode 客户端模式没有密钥可给。
+func TestRevealPSKRefusedInClientMode(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	console, err := New(Deps{
+		Version:   "test",
+		StartedAt: time.Now(),
+		Mode:      config.ModeClient,
+		Logger:    newTestLogger(t),
+		Control:   NewControl(),
+	})
+	if err != nil {
+		t.Fatalf("建面板失败：%v", err)
+	}
+	recorder := call(t, console, http.MethodPost, "/api/relay/psk/reveal", nil, nil)
+	if recorder.Code != http.StatusNotImplemented {
+		t.Errorf("状态码 = %d，期望 501", recorder.Code)
 	}
 }

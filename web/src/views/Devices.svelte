@@ -11,6 +11,7 @@
   // 配对表单：客户端首次连网关时用。
   let pairAddress = $state("");
   let pairKey = $state("");
+  let pairCode = $state("");
   let pairStep = $state("form"); // form → confirm
   let pairFingerprint = $state("");
   let pairBusy = $state(false);
@@ -57,6 +58,51 @@
   );
   const primaryAddress = $derived(relayAddresses[0] ?? "—");
 
+  // 配对码的剩余秒数。用它做过期提示，避免用户拿一个已经失效的码去试。
+  let clock = $state(Date.now());
+  const pairSecondsLeft = $derived.by(() => {
+    const raw = relay?.pair_code_expires_at;
+    if (!raw) return 0;
+    const left = Math.floor((new Date(raw).getTime() - clock) / 1000);
+    return left > 0 ? left : 0;
+  });
+  const pairCodeLive = $derived(Boolean(relay?.pair_code) && pairSecondsLeft > 0);
+
+  // 只在真的有码的时候才每秒跳一次，平时不占资源。
+  $effect(() => {
+    if (!relay?.pair_code_expires_at) return;
+    const timer = setInterval(() => (clock = Date.now()), 1000);
+    return () => clearInterval(timer);
+  });
+
+  async function issuePairCode() {
+    error = "";
+    try {
+      const payload = await api.issuePairCode();
+      relay = { ...relay, pair_code: payload.pair_code, pair_code_expires_at: payload.pair_code_expires_at };
+      clock = Date.now();
+    } catch (cause) {
+      error = cause instanceof ApiError ? cause.message : String(cause);
+    }
+  }
+
+  // 完整密钥默认不显示：它是账号访问权，不该一进页面就铺在屏幕上。
+  // 点「显示」才去取，取回来只放在内存里。
+  let fullKey = $state("");
+  async function revealKey() {
+    error = "";
+    if (fullKey) {
+      fullKey = "";
+      return;
+    }
+    try {
+      const payload = await api.revealPSK();
+      fullKey = payload.psk || "";
+    } catch (cause) {
+      error = cause instanceof ApiError ? cause.message : String(cause);
+    }
+  }
+
   // 复制按钮共用一个：三处要复制的东西格式不同，但反馈是同一套。
   let copied = $state("");
   async function copy(text, what) {
@@ -88,7 +134,7 @@
     pairBusy = true;
     error = "";
     try {
-      const payload = await api.pairingProbe(pairAddress, pairKey);
+      const payload = await api.pairingProbe(pairAddress);
       if (payload.error) {
         error = payload.error;
       } else {
@@ -107,7 +153,7 @@
     pairBusy = true;
     error = "";
     try {
-      await api.pairingConfirm(pairAddress, pairKey, pairFingerprint);
+      await api.pairingConfirm(pairAddress, pairCode, pairKey, pairFingerprint);
       notice = "配对完成，正在重启以生效…";
       await api.restart();
     } catch (cause) {
@@ -267,37 +313,81 @@
     {/if}
 
     <div class="card" style="margin-top:24px">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap">
+        <h3>配对码</h3>
+        {#if pairCodeLive}
+          <span class="dim">剩余 {Math.floor(pairSecondsLeft / 60)}:{String(pairSecondsLeft % 60).padStart(2, "0")}</span>
+        {/if}
+      </div>
+      <p class="dim" style="margin-top:8px">
+        在另一台机器的客户端控制台「多设备」页填这 6 位。5 分钟内有效，用过即废。
+        不想用短码也可以复制下面的长密钥。
+      </p>
+      <div class="field-row" style="margin-top:12px">
+        {#if pairCodeLive}
+          <span class="pair-code" style="user-select:all">{relay.pair_code}</span>
+          <button class="action" onclick={() => copy(relay.pair_code.replace("-", ""), "code")}>
+            {copied === "code" ? "已复制" : "复制码"}
+          </button>
+          <button class="action" onclick={issuePairCode}>换一个</button>
+        {:else}
+          <span class="dim">当前没有有效的配对码。</span>
+          <button class="action primary" onclick={issuePairCode}>生成配对码</button>
+        {/if}
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:24px">
       <h3>连接信息</h3>
       <table style="margin-top:12px">
         <tbody>
+          <!-- 值 + 操作**同一行**。把按钮单独放一栏会让它们竖着堆起来，
+               和左边的值对不齐；一行的东西就该在一行上。 -->
           <tr>
             <th style="width:120px">转发地址</th>
             <td>
-              <span class="mono-small" style="color:var(--ink)">{primaryAddress}</span>
-              {#if relayAddresses.length > 1}
-                <span class="dim">　（另有 {relayAddresses.length - 1} 个网卡地址）</span>
-              {/if}
-            </td>
-            <td style="width:120px">
-              <button class="action" onclick={() => copy(primaryAddress, "addr")}>
-                复制地址
-              </button>
+              <div class="field-row">
+                <span class="mono-small" style="color:var(--ink)">{primaryAddress}</span>
+                {#if relayAddresses.length > 1}
+                  <span class="dim">另有 {relayAddresses.length - 1} 个网卡地址</span>
+                {/if}
+                <button class="action" onclick={() => copy(primaryAddress, "addr")}>
+                  {copied === "addr" ? "已复制" : "复制地址"}
+                </button>
+              </div>
             </td>
           </tr>
           <tr>
             <th>网关密钥</th>
-            <td class="num">{relay.psk_hint || "未配置"}</td>
             <td>
-              <button class="action" onclick={askReset}>重置密钥</button>
+              <div class="field-row">
+                {#if fullKey}
+                  <span class="mono-small" style="color:var(--ink);user-select:all">{fullKey}</span>
+                {:else}
+                  <span class="num">{relay.psk_hint || "未配置"}</span>
+                {/if}
+                <button class="action" onclick={revealKey}>
+                  {fullKey ? "隐藏" : "显示"}
+                </button>
+                <button
+                  class="action"
+                  onclick={() => copy(fullKey, "psk")}
+                  disabled={!fullKey}
+                >
+                  {copied === "psk" ? "已复制" : "复制密钥"}
+                </button>
+              </div>
             </td>
           </tr>
           <tr>
             <th>证书指纹</th>
-            <td><span class="mono-small">{relay.fingerprint}</span></td>
             <td>
-              <button class="action" onclick={() => copy(relay.fingerprint, "fp")}>
-                复制指纹
-              </button>
+              <div class="field-row">
+                <span class="mono-small">{relay.fingerprint}</span>
+                <button class="action" onclick={() => copy(relay.fingerprint, "fp")}>
+                  {copied === "fp" ? "已复制" : "复制指纹"}
+                </button>
+              </div>
             </td>
           </tr>
         </tbody>
@@ -381,8 +471,9 @@
     <!-- 客户端首次使用：先配对。密钥与指纹都在这里填、在这里比对，
          不进命令行（会留在 shell history 与 ps 输出里）。 -->
     <div class="notice">
-      本机还没和网关配对。填入网关控制台「多设备」页显示的<strong>网关密钥</strong>，
-      并比对证书指纹——比对过之后连接才成立。
+      本机还没和网关配对。填上网关地址，点「连接」——网页会去取网关证书的指纹；
+      把它与网关控制台显示的<strong>逐位比对</strong>，一致再填配对码。
+      配对码在网关控制台「多设备」页点「生成配对码」得到，6 位，5 分钟内有效。
     </div>
     {#if pairStep === "form"}
       <div class="card tight">
@@ -400,14 +491,34 @@
               </td>
             </tr>
             <tr>
-              <th>网关密钥</th>
+              <th>配对码</th>
               <td>
+                <!-- 6 位短码，网关控制台显示的那个。关掉拼写检查与自动大写，
+                     否则输入框会在旁边画红波浪线，看着像填错了。 -->
                 <input
                   type="text"
-                  placeholder="网关控制台显示的那串"
-                  bind:value={pairKey}
+                  placeholder="4F7-K92"
+                  bind:value={pairCode}
+                  spellcheck="false"
+                  autocomplete="off"
+                  autocapitalize="off"
                   style="width:100%"
                 />
+                <p class="dim" style="margin-top:6px">
+                  在网关控制台「多设备」页点「生成配对码」。5 分钟内有效、用过即废。
+                </p>
+                <details style="margin-top:6px">
+                  <summary class="dim" style="cursor:pointer">改用长密钥</summary>
+                  <input
+                    type="text"
+                    placeholder="网关控制台点「显示」后复制过来的那串"
+                    bind:value={pairKey}
+                    spellcheck="false"
+                    autocomplete="off"
+                    autocapitalize="off"
+                    style="width:100%;margin-top:6px"
+                  />
+                </details>
               </td>
             </tr>
           </tbody>

@@ -22,6 +22,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/paircode"
 	pairingPkg "github.com/Titor-Z/pi-love-workbuddy-gateway/internal/pairing"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/panel"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relay"
@@ -67,6 +68,8 @@ type runtime struct {
 	address string
 
 	certificate tls.Certificate
+	// pairingCodes 是网关侧的短配对码。只有网关模式且转发服务开启时才有。
+	pairingCodes *paircode.Code
 }
 
 // pskHint 给面板用：绝不返回密钥本身，只说有没有、给前几位方便核对。
@@ -353,6 +356,8 @@ func (r *runtime) enableRelay(logger *logging.Logger) error {
 			epoch: r.syncEpoch,
 		}
 	}
+	r.pairingCodes = paircode.New()
+	deps.PairingCodes = r.pairingCodes
 	r.relay = relay.NewServer(deps)
 	return nil
 }

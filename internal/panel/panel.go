@@ -20,6 +20,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/paircode"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/webui"
 )
 
@@ -57,14 +58,22 @@ type Deps struct {
 	// PairingAddress 是本次要连的网关地址，预填进表单。
 	PairingAddress string
 
-	// RelayAddr / RelayEnabled / TLSFingerprint / PSKHint / Devices 描述转发服务，
-	// 只有网关模式才有。
+	// RelayAddr / RelayEnabled / TLSFingerprint / PSK / PSKHint / Devices
+	// 描述转发服务，只有网关模式才有。
+	//
+	// PSK 是完整密钥，**只经由专用的按需接口下发**（POST /api/relay/psk/reveal），
+	// 不随任何列表接口返回。理由：列表接口会被面板的轮询反复拉取，
+	// 密钥跟着在浏览器内存与网络面板里反复出现，没有必要。
+	// PSKHint 是可以随列表返回的提示（前几位 + 总长度）。
 	RelayAddr      string
 	RelayEnabled   bool
 	TLSFingerprint string
+	PSK            string
 	PSKHint        string
-	Devices        *devices.Registry
-	Device         *identity.Device
+	// PairingCodes 生成一次性配对码。只有网关模式才有。
+	PairingCodes *paircode.Code
+	Devices      *devices.Registry
+	Device       *identity.Device
 
 	ListenAddr     string
 	ConsoleAddr    string
@@ -140,6 +149,8 @@ func (p *Panel) Handler() http.Handler {
 	// 转发服务与设备管理。只在网关模式下有意义，客户端模式一律 501。
 	mux.HandleFunc("GET /api/relay", p.guarded(p.handleRelay))
 	mux.HandleFunc("POST /api/relay/psk", p.guarded(p.handleResetPSK))
+	mux.HandleFunc("POST /api/relay/psk/reveal", p.guarded(p.handleRevealPSK))
+	mux.HandleFunc("POST /api/relay/paircode", p.guarded(p.handleIssuePairCode))
 	mux.HandleFunc("POST /api/relay/enable", p.guarded(p.handleEnableRelay))
 	mux.HandleFunc("POST /api/devices/revoke", p.guarded(p.handleRevokeDevice))
 	mux.HandleFunc("POST /api/devices/unrevoke", p.guarded(p.handleUnrevokeDevice))

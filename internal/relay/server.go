@@ -13,11 +13,15 @@
 package relay
 
 import (
+	"encoding/json"
+	"io"
+	"net"
 	"net/http"
 	"reflect"
 	"strings"
 
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/paircode"
 )
 
 const (
@@ -31,6 +35,10 @@ const (
 
 // pingPath 让客户端不必发一次真实请求就能确认网关在不在、指纹对不对。
 const pingPath = "/relay/v1/ping"
+
+// pairPath 是配对端点。它**不需要 PSK**——短码本身就是这次的凭据。
+// 校验通过后把长密钥交出去（走 TLS），之后客户端一直用长密钥。
+const pairPath = "/relay/v1/pair"
 
 // credentialPath 是凭证同步端点。
 //
@@ -50,9 +58,11 @@ type Deps struct {
 	CredentialSource CredentialSource
 	// Devices 登记到访设备；为 nil 时不登记（仍然校验 PSK）。
 	Devices DeviceRegistry
-	PSK     string
-	Version string
-	Logger  Reporter
+	// PairingCodes 校验一次性配对码。为 nil 时 /relay/v1/pair 一律拒绝。
+	PairingCodes *paircode.Code
+	PSK          string
+	Version      string
+	Logger       Reporter
 }
 
 // DeviceRegistry 是 relay 需要的设备表能力。抽窄接口是为了让调用方能不用
@@ -88,6 +98,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+pingPath, s.authorized(s.handlePing))
 	mux.Handle("/v1/", s.authorized(s.forward()))
 	mux.HandleFunc("GET "+credentialPath, s.authorized(s.handleCredential))
+	// 配对端点不走 authorized：它要拿短码换长密钥，而长密钥正是它还没有的东西。
+	mux.HandleFunc("POST "+pairPath, s.handlePair)
 	return mux
 }
 
@@ -117,6 +129,53 @@ func (s *Server) authorized(next http.HandlerFunc) http.HandlerFunc {
 		ctx := MarkRelay(WithDevice(r.Context(), deviceID))
 		next(w, r.WithContext(ctx))
 	}
+}
+
+// handlePair 用一次性配对码换取长密钥。
+//
+// 这个端点是唯一一个不需要 PSK 的入口，所以它的防护全在配对码上：
+// 5 分钟有效、一次性、错 10 次作废、全局一分钟失败上限。
+//
+// 它只在**网关模式下转发服务开启时**才有东西可给；客户端模式没有密钥。
+func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
+	if s.deps.PairingCodes == nil || s.deps.PSK == "" {
+		writeRelayError(w, http.StatusNotImplemented, "not_configured",
+			"本网关没有启用转发服务，无法配对")
+		return
+	}
+	if s.deps.PairingCodes.Throttled() {
+		writeRelayError(w, http.StatusTooManyRequests, "too_many_attempts",
+			"配对尝试过于频繁，请稍后再试，或在网关控制台重新生成配对码")
+		return
+	}
+	var request struct {
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 4<<10)).Decode(&request); err != nil {
+		writeRelayError(w, http.StatusBadRequest, "bad_request", "请求体不是合法 JSON")
+		return
+	}
+	if !s.deps.PairingCodes.Redeem(request.Code) {
+		writeRelayError(w, http.StatusUnauthorized, "bad_pairing_code",
+			"配对码不正确或已过期。请在网关控制台重新生成一个。")
+		return
+	}
+	if s.deps.Logger != nil {
+		s.deps.Logger.Printf("配对成功，已向 %s 发放网关密钥", remoteHost(r))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"psk":     s.deps.PSK,
+		"version": s.deps.Version,
+	})
+}
+
+// remoteHost 取出调用方的地址（不含端口），只用于日志。
+func remoteHost(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
 }
 
 // forward 把请求交给网关自己的 Handler。

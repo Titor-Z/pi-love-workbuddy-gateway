@@ -254,6 +254,37 @@ code.copyable {
 /* 次要说明：次级文字色，不用 opacity（design.md：弱化不用透明度）。 */
 /* 指纹这类长十六进制串：等宽、小一号、可换行。
    它不是数字，不该占一个统计块的大字号位置。 */
+/* 值 + 操作同一行。flex 不换行，值可以被压缩（长指纹要能挤得下），
+   按钮永远保持原宽。 */
+/* 配对码：6 位短码是让用户抄的，所以要大到能一眼读出来。
+   等宽 + 负字距 + 大字号，和主角数字同一套语言。 */
+.pair-code {
+  font-family: var(--font-mono);
+  font-size: clamp(28px, 3.4vw, 40px);
+  letter-spacing: 0.08em;
+  line-height: 1;
+  color: var(--ink);
+  flex: 0 0 auto;
+}
+
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: nowrap;
+}
+
+.field-row > .mono-small,
+.field-row > .num,
+.field-row > .dim {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.field-row > button {
+  flex: 0 0 auto;
+}
+
 .mono-small {
   font-family: var(--font-mono);
   font-size: 12px;

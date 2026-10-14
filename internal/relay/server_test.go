@@ -1,11 +1,15 @@
 package relay
 
 import (
+	"bytes"
 	"crypto/tls"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/paircode"
 )
 
 // newTestServer 起一个走 TLS 的 relay 服务端，返回 HTTP 客户端与真实指纹。
@@ -269,4 +273,69 @@ func TestServerConfigUsesTLS12OrAbove(t *testing.T) {
 // serverTLS 是 relay 端口的 TLS 配置。
 func serverTLS(certificate tls.Certificate) *tls.Config {
 	return &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12}
+}
+
+// TestPairExchangesCodeForPSK 短码换长密钥：客户端要的是长密钥，不是短码本身。
+func TestPairExchangesCodeForPSK(t *testing.T) {
+	codes := paircode.New()
+	code, _, err := codes.Issue()
+	if err != nil {
+		t.Fatalf("生成配对码失败：%v", err)
+	}
+	server := NewServer(Deps{PSK: "LONG-PSK-VALUE", PairingCodes: codes, Version: "test"})
+
+	body, _ := json.Marshal(map[string]string{"code": code})
+	request := httptest.NewRequest(http.MethodPost, pairPath, bytes.NewReader(body))
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d，期望 200：%s", recorder.Code, recorder.Body.String())
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("响应不是 JSON：%v", err)
+	}
+	if payload["psk"] != "LONG-PSK-VALUE" {
+		t.Errorf("换回来的密钥 = %v，期望长密钥原文", payload["psk"])
+	}
+	// 一次性：同一个短码不能再用。
+	second := httptest.NewRecorder()
+	server.Handler().ServeHTTP(second, httptest.NewRequest(http.MethodPost, pairPath,
+		bytes.NewReader(body)))
+	if second.Code != http.StatusUnauthorized {
+		t.Errorf("同一个短码第二次使用的状态码 = %d，期望 401", second.Code)
+	}
+}
+
+// TestPairRejectsBadCode 错误的短码必须被拒，且**不能**泄漏长密钥。
+func TestPairRejectsBadCode(t *testing.T) {
+	codes := paircode.New()
+	if _, _, err := codes.Issue(); err != nil {
+		t.Fatalf("生成配对码失败：%v", err)
+	}
+	server := NewServer(Deps{PSK: "LONG-PSK-VALUE", PairingCodes: codes})
+
+	body, _ := json.Marshal(map[string]string{"code": "ZZZZZZ"})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, pairPath,
+		bytes.NewReader(body)))
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("状态码 = %d，期望 401", recorder.Code)
+	}
+	if strings.Contains(recorder.Body.String(), "LONG-PSK-VALUE") {
+		t.Fatal("失败的配对响应里出现了长密钥")
+	}
+}
+
+// TestPairRefusedWhenRelayOff 没有开启转发服务时，配对端点不能把密钥给出去。
+func TestPairRefusedWhenRelayOff(t *testing.T) {
+	server := NewServer(Deps{Version: "test"})
+	recorder := httptest.NewRecorder()
+	server.Handler().ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, pairPath,
+		strings.NewReader(`{"code":"ABC123"}`)))
+	if recorder.Code != http.StatusNotImplemented {
+		t.Errorf("状态码 = %d，期望 501", recorder.Code)
+	}
 }

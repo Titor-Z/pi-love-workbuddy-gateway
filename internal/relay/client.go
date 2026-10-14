@@ -67,6 +67,71 @@ func NewClient(cfg Config) (*Client, error) {
 	return &Client{cfg: cfg, http: httpClient}, nil
 }
 
+// RedeemPairCode 用一次性配对码换回长密钥。
+//
+// 这一步发生在**配对之前**，所以它不能用 Client（Client 的构造就要求已有密钥）。
+// 指纹仍然要钉：否则中途换个人冒充网关，用户就把长密钥交出去了。
+func RedeemPairCode(ctx context.Context, baseURL, fingerprint, code string) (string, error) {
+	base, err := normalizeBaseURL(baseURL)
+	if err != nil {
+		return "", err
+	}
+	if fingerprint == "" {
+		return "", fmt.Errorf("尚未确认网关证书指纹")
+	}
+	if strings.TrimSpace(code) == "" {
+		return "", fmt.Errorf("请填入网关控制台显示的配对码")
+	}
+	payload, err := json.Marshal(map[string]string{"code": code})
+	if err != nil {
+		return "", err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		base+pairPath, bytes.NewReader(payload))
+	if err != nil {
+		return "", fmt.Errorf("构造配对请求失败：%w", err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Transport: relaytls.Transport(fingerprint)}
+	response, err := client.Do(request)
+	if err != nil {
+		return "", fmt.Errorf("连接网关失败：%w", err)
+	}
+	defer response.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+	if err != nil {
+		return "", fmt.Errorf("读取配对响应失败：%w", err)
+	}
+	if response.StatusCode != http.StatusOK {
+		return "", relayErrorMessage(response.StatusCode, body)
+	}
+	var result struct {
+		PSK string `json:"psk"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("配对响应不是合法 JSON：%w", err)
+	}
+	if result.PSK == "" {
+		return "", fmt.Errorf("网关没有返回密钥")
+	}
+	return result.PSK, nil
+}
+
+// relayErrorMessage 把 relay 的错误响应还原成一句人话。
+func relayErrorMessage(status int, body []byte) error {
+	var payload struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &payload); err == nil && payload.Error.Message != "" {
+		return errors.New(payload.Error.Message)
+	}
+	return fmt.Errorf("网关返回 HTTP %d", status)
+}
+
 // ChatStream 转发一次对话补全，返回尚未读取的原始响应。
 //
 // 请求体**不做任何解析与改写**：改写（developer→system、字段白名单）已经在

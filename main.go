@@ -23,6 +23,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/netif"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/panel"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relay"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relaytls"
 )
 
@@ -133,6 +134,8 @@ func runServe(cfg *config.Config, args []string) error {
 		RelayAddr:      cfg.RelayAddr,
 		RelayEnabled:   parts.relay != nil,
 		TLSFingerprint: parts.fingerprint,
+		PSK:            parts.psk,
+		PairingCodes:   parts.pairingCodes,
 		PSKHint:        parts.pskHint(),
 		Devices:        parts.devices,
 		Device:         parts.device,
@@ -242,6 +245,8 @@ func runServe(cfg *config.Config, args []string) error {
 		host := strings.TrimPrefix(strings.TrimPrefix(address, "https://"), "http://")
 		return relaytls.ProbeFingerprint(ctx, host)
 	})
+	// 短配对码换长密钥。指纹已经钉在这一次连接上。
+	panel.SetRedeemPairCode(relay.RedeemPairCode)
 
 	// 客户端模式：后台同步凭证。网关模式没有这一步——凭证本来就在本机。
 	if parts.syncer != nil {

@@ -72,10 +72,16 @@ export const api = {
   revokeDevice: (id) => request("POST", `/api/devices/revoke?id=${encodeURIComponent(id)}`),
   unrevokeDevice: (id) => request("POST", `/api/devices/unrevoke?id=${encodeURIComponent(id)}`),
   resetRelayPSK: () => request("POST", "/api/relay/psk", { confirm: true }),
+  // 完整密钥按需取：不随列表接口返回，避免被轮询反复拉走。
+  revealPSK: () => request("POST", "/api/relay/psk/reveal"),
+  // 生成一次性短配对码（网关侧点一下，客户端填进去）。
+  issuePairCode: () => request("POST", "/api/relay/paircode"),
   setRelayEnabled: (enabled) => request("POST", "/api/relay/enable", { enable: enabled }),
-  pairingProbe: (address, psk) => request("POST", "/api/pairing/probe", { address, psk }),
-  pairingConfirm: (address, psk, fingerprint) =>
-    request("POST", "/api/pairing/confirm", { address, psk, fingerprint }),
+  // 探测只取指纹、不建立信任：密钥与配对码都不参与，
+  // 所以用户在比对指纹之前不需要先把任何凭据交出去。
+  pairingProbe: (address) => request("POST", "/api/pairing/probe", { address }),
+  pairingConfirm: (address, code, psk, fingerprint) =>
+    request("POST", "/api/pairing/confirm", { address, code, psk, fingerprint }),
   restart: () => request("POST", "/api/control/restart"),
   sync: () => request("GET", "/api/sync"),
   setSync: (enabled) => request("POST", "/api/sync", { enable: enabled, confirm: true }),
