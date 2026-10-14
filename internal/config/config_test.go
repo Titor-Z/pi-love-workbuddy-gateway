@@ -18,6 +18,11 @@ func TestParseDefaults(t *testing.T) {
 	if cfg.ListenAddr != "127.0.0.1:8788" {
 		t.Errorf("ListenAddr = %q", cfg.ListenAddr)
 	}
+	// 控制台必须与 API 分开：控制台含余额、请求日志与停止/重启，
+	// 跟着可能被改成 0.0.0.0 的 API 端口一起暴露是真实的安全缺口。
+	if cfg.ConsoleAddr != "127.0.0.1:8789" {
+		t.Errorf("ConsoleAddr = %q", cfg.ConsoleAddr)
+	}
 	if cfg.APIKey != "" || cfg.AuthFile != "" || cfg.AtRestSecret != "" || cfg.Promotions != "" {
 		t.Errorf("默认配置不该有非空的可选字段：%+v", cfg)
 	}
@@ -35,6 +40,7 @@ func TestParseDefaults(t *testing.T) {
 func TestParseFlags(t *testing.T) {
 	cfg, err := Parse([]string{
 		"-addr", "127.0.0.1:9999",
+		"-console-addr", "127.0.0.1:9998",
 		"-api-key", "secret",
 		"-auth-file", "/tmp/a.info",
 		"-at-rest-secret", "key",
@@ -47,6 +53,7 @@ func TestParseFlags(t *testing.T) {
 	}
 	if cfg.ListenAddr != "127.0.0.1:9999" || cfg.APIKey != "secret" ||
 		cfg.AuthFile != "/tmp/a.info" || cfg.AtRestSecret != "key" ||
+		cfg.ConsoleAddr != "127.0.0.1:9998" ||
 		cfg.Promotions != "/tmp/p.json" || cfg.LogPath != "/tmp/out.log" || !cfg.PiOutput {
 		t.Errorf("参数没有全部生效：%+v", cfg)
 	}
@@ -59,11 +66,21 @@ func TestParseRejectsUnknownFlag(t *testing.T) {
 	}
 }
 
-// TestParseRejectsEmptyAddr 监听地址为空要拦下，否则会起在一个随机端口上。
-func TestParseRejectsEmptyAddr(t *testing.T) {
-	_, err := Parse([]string{"-addr", ""}, &bytes.Buffer{})
-	if err == nil || !strings.Contains(err.Error(), "监听地址") {
-		t.Fatalf("应当报监听地址不能为空，实际：%v", err)
+// TestParseRejectsSameAddrForConsole 控制台与 API 不能共用一个端口：
+// 共用了就等于把控制台跟着 API 一起暴露出去，而控制台含余额、请求日志与停止/重启。
+func TestParseRejectsSameAddrForConsole(t *testing.T) {
+	_, err := Parse([]string{"-addr", "0.0.0.0:8788", "-console-addr", "0.0.0.0:8788"}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "控制台") {
+		t.Fatalf("应当报控制台地址冲突，实际：%v", err)
+	}
+}
+
+// TestParseRejectsEmptyConsoleAddr 控制台地址为空要拦下，否则会起在随机端口上，
+// 用户根本找不到面板在哪。
+func TestParseRejectsEmptyConsoleAddr(t *testing.T) {
+	_, err := Parse([]string{"-console-addr", ""}, &bytes.Buffer{})
+	if err == nil || !strings.Contains(err.Error(), "控制台监听地址") {
+		t.Fatalf("应当报控制台监听地址不能为空，实际：%v", err)
 	}
 }
 

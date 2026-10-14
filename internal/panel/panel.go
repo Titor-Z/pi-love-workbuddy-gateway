@@ -42,6 +42,7 @@ type Deps struct {
 	StartedAt      time.Time
 	AuthFile       string
 	ListenAddr     string
+	ConsoleAddr    string
 	LogPath        string
 	JournalPath    string
 	PromotionsPath string

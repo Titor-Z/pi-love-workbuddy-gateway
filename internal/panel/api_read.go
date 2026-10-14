@@ -19,6 +19,7 @@ type statusResponse struct {
 	UptimeSeconds  int64          `json:"uptime_seconds"`
 	PID            int            `json:"pid"`
 	ListenAddr     string         `json:"listen_addr"`
+	ConsoleAddr    string         `json:"console_addr"`
 	AuthFile       string         `json:"auth_file"`
 	LogPath        string         `json:"log_path"`
 	JournalPath    string         `json:"journal_path"`
@@ -39,6 +40,7 @@ func (p *Panel) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		UptimeSeconds:  int64(time.Since(p.deps.StartedAt).Seconds()),
 		PID:            os.Getpid(),
 		ListenAddr:     p.deps.ListenAddr,
+		ConsoleAddr:    p.deps.ConsoleAddr,
 		AuthFile:       p.deps.AuthFile,
 		LogPath:        p.deps.LogPath,
 		JournalPath:    p.deps.JournalPath,

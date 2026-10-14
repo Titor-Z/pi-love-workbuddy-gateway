@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -131,13 +133,14 @@ func runServe(cfg *config.Config, args []string) error {
 	client := upstream.NewClient(cred, "")
 	startedAt := time.Now()
 
-	gatewayHandler := gateway.NewServer(cfg, cred, client, promotions, logger, events).Handler()
+	gatewayHandler := gateway.NewServer(cfg, cred, client, promotions, logger, events)
 	control := panel.NewControl()
 	console, err := panel.New(panel.Deps{
 		Version:        version,
 		StartedAt:      startedAt,
 		AuthFile:       cred.Path(),
 		ListenAddr:     cfg.ListenAddr,
+		ConsoleAddr:    cfg.ConsoleAddr,
 		LogPath:        cfg.LogPath,
 		JournalPath:    cfg.JournalPath,
 		PromotionsPath: resolvePromotionsPath(cfg),
@@ -153,16 +156,23 @@ func runServe(cfg *config.Config, args []string) error {
 		return err
 	}
 
-	// 面板挂在根路径，网关的接口挂在各自的路径上。
-	// /v1/* 与 /health 仍然只走网关那套 OpenAPI 兼容处理，不受面板影响。
-	root := http.NewServeMux()
-	root.Handle("/v1/", gatewayHandler)
-	root.Handle("/health", gatewayHandler)
-	root.Handle("/", console.Handler())
+	// v0.3.0 起控制台与 API 分属两个端口。
+	// 理由：控制台含余额、请求日志（含被拦对话正文）与停止/重启按钮，
+	// 它绝不能跟着「可能被改成 0.0.0.0 的那个端口」一起暴露到局域网。
+	// 这里给 API 端口的根路径留一段说明，避免升级后用户以为服务坏了。
+	apiMux := http.NewServeMux()
+	apiMux.Handle("/v1/", gatewayHandler.Handler())
+	apiMux.Handle("/health", gatewayHandler.Handler())
+	apiMux.HandleFunc("/", apiRootNotice(cfg.ConsoleAddr))
 
-	httpServer := &http.Server{
+	apiServer := &http.Server{
 		Addr:              cfg.ListenAddr,
-		Handler:           root,
+		Handler:           apiMux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	consoleServer := &http.Server{
+		Addr:              cfg.ConsoleAddr,
+		Handler:           console.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -171,13 +181,15 @@ func runServe(cfg *config.Config, args []string) error {
 	logger.Printf("密钥指纹：%s", cipher.KeyID())
 	logger.Printf("日志：%s", describeLogPath(cfg.LogPath))
 	logger.Printf("事件：%s", describeLogPath(cfg.JournalPath))
-	logger.Printf("监听：http://%s", cfg.ListenAddr)
-	logger.Printf("    控制台    http://%s/", cfg.ListenAddr)
-	logger.Printf("    GET  /health")
-	logger.Printf("    GET  /v1/models")
-	logger.Printf("    POST /v1/chat/completions")
+	logger.Printf("API     http://%s  （/v1/* 与 /health）", cfg.ListenAddr)
+	logger.Printf("控制台  http://%s/", cfg.ConsoleAddr)
+	if !isLoopbackAddr(cfg.ConsoleAddr) {
+		// 控制台含余额、请求日志（含被拦对话正文）与停止/重启按钮，
+		// 绑到非本机地址等于把这些一起开放出去。允许，但必须明说。
+		logger.Printf("⚠️ 控制台未只绑本机：余额、请求日志与停止/重启按钮已暴露到该地址，请自行加认证")
+	}
 	if cfg.APIKey != "" {
-		logger.Printf("已启用本地访问密钥校验")
+		logger.Printf("已启用本地访问密钥校验（仅作用于 API 端口，不作用于控制台）")
 	}
 	logger.Printf("提示：本软件为第三方工具，与腾讯 / WorkBuddy 无官方关联，" +
 		"使用风险自负；完整条款见 README 的《免责声明》。")
@@ -189,7 +201,12 @@ func runServe(cfg *config.Config, args []string) error {
 		Message: fmt.Sprintf("启动 %s，监听 %s", version, cfg.ListenAddr)})
 
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- httpServer.ListenAndServe() }()
+	go func() { serveErr <- apiServer.ListenAndServe() }()
+	go func() {
+		if err := consoleServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			serveErr <- fmt.Errorf("控制台监听失败：%w", err)
+		}
+	}()
 
 	// 等三种事：服务出错、收到退出信号、或者面板请求停止/重启。
 	var action panel.Action
@@ -208,7 +225,9 @@ func runServe(cfg *config.Config, args []string) error {
 	// 而且它会释放端口，重启时新进程才能立刻绑上。
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	shutdownErr := httpServer.Shutdown(shutdownCtx)
+	// 控制台不对外，先关；API 可能有在途的流式请求，留到最后。
+	_ = consoleServer.Shutdown(shutdownCtx)
+	shutdownErr := apiServer.Shutdown(shutdownCtx)
 
 	switch action {
 	case panel.ActionRestart:
@@ -242,6 +261,45 @@ func restartSelf(cfg *config.Config, args []string, logger *logging.Logger,
 	}
 	logger.Printf("新进程已接管，本进程退出")
 	return nil
+}
+
+// apiRootNotice 是 API 端口根路径的响应。
+//
+// v0.3.0 起控制台搬到了独立端口。老用户习惯打开 http://127.0.0.1:8788/ 找面板，
+// 如果这里直接 404，升级后第一反应会是「服务坏了」。所以如实告诉他去哪儿。
+func apiRootNotice(consoleAddr string) http.HandlerFunc {
+	body := "pi-love-workbuddy-gateway\n\n" +
+		"这里是 API 端口，只提供 /v1/* 与 /health。\n" +
+		"Web 控制台已迁到独立端口：http://" + consoleAddr + "/\n"
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" {
+			writeNotFound(w, r.URL.Path)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, body)
+	}
+}
+
+// writeNotFound 是 API 端口上未匹配路径的统一响应。
+func writeNotFound(w http.ResponseWriter, path string) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = io.WriteString(w, "未找到："+path+"\n本端口只提供 /v1/* 与 /health，控制台在另一个端口。\n")
+}
+
+// isLoopbackAddr 判断监听地址是不是只绑本机。
+// 只认最常见的三种写法：127.*、localhost、[::1]；其余一律当作「非本机」，
+// 宁可多警告一次，也不要因为漏判而把控制台静默暴露出去。
+func isLoopbackAddr(addr string) bool {
+	host := addr
+	if index := strings.LastIndex(host, ":"); index >= 0 && !strings.Contains(host[index+1:], "]") {
+		host = host[:index]
+	}
+	host = strings.Trim(host, "[]")
+	return host == "127.0.0.1" || strings.HasPrefix(host, "127.") ||
+		host == "localhost" || host == "::1"
 }
 
 // runModels 拉取实时模型目录并打印，可选输出成 pi 的 models.json。

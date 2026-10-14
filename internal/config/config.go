@@ -11,8 +11,13 @@ import (
 
 // Config 是网关的运行期配置。
 type Config struct {
-	// ListenAddr 是本地监听地址，形如 127.0.0.1:8788。
+	// ListenAddr 是 API 监听地址，形如 127.0.0.1:8788。
+	// 只提供 /v1/* 与 /health，pi 的 baseUrl 指向这里。
 	ListenAddr string
+	// ConsoleAddr 是 Web 控制台的监听地址，形如 127.0.0.1:8789。
+	// v0.3.0 起控制台不再与 API 共用端口：控制台含余额、请求日志与停止/重启，
+	// 必须与「允许对外暴露」的那个端口分开。
+	ConsoleAddr string
 	// APIKey 非空时，本地客户端必须携带同一个密钥才能访问。
 	APIKey string
 	// AuthFile 是 WorkBuddy 登录态文件路径；留空则由 authdir.Locate 自动探测。
@@ -43,7 +48,8 @@ func Parse(args []string, errOut io.Writer) (*Config, error) {
 	cfg := &Config{}
 	fs := flag.NewFlagSet("pi-love-workbuddy-gateway", flag.ContinueOnError)
 	fs.SetOutput(errOut)
-	fs.StringVar(&cfg.ListenAddr, "addr", "127.0.0.1:8788", "本地监听地址")
+	fs.StringVar(&cfg.ListenAddr, "addr", "127.0.0.1:8788", "API 监听地址（/v1/* 与 /health）")
+	fs.StringVar(&cfg.ConsoleAddr, "console-addr", "127.0.0.1:8789", "Web 控制台监听地址，只绑本机")
 	fs.StringVar(&cfg.APIKey, "api-key", "", "本地访问密钥，留空表示不校验")
 	fs.StringVar(&cfg.AuthFile, "auth-file", "", "WorkBuddy 登录态文件路径，留空自动探测")
 	fs.StringVar(&cfg.AtRestSecret, "at-rest-secret", "", "at-rest 根密钥（44 字符 base64），留空自动获取")
@@ -57,6 +63,13 @@ func Parse(args []string, errOut io.Writer) (*Config, error) {
 	}
 	if cfg.ListenAddr == "" {
 		return nil, fmt.Errorf("监听地址不能为空")
+	}
+	if cfg.ConsoleAddr == "" {
+		return nil, fmt.Errorf("控制台监听地址不能为空")
+	}
+	if cfg.ListenAddr == cfg.ConsoleAddr {
+		return nil, fmt.Errorf("控制台地址不能与 API 地址相同（%s）："+
+			"控制台含余额、请求日志与停止/重启，必须与 API 端口分开", cfg.ListenAddr)
 	}
 	return cfg, nil
 }

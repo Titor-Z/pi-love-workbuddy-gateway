@@ -1,7 +1,9 @@
 import { defineConfig } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
 
-const GATEWAY = "http://127.0.0.1:8788";
+// 控制台端口。v0.3.0 起控制台与 API 分属两个端口：
+// 面板页面与 /api/* 在 8789，API 端口 8788 只有 /v1/* 与 /health。
+const GATEWAY = "http://127.0.0.1:8789";
 
 // 开发模式下从正在运行的网关借来页内凭据。
 //
