@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -49,11 +51,17 @@ func main() {
 
 // run 解析参数并按子命令分发。
 func run(args []string) error {
+	// -help / --help / -h 打用法；这是唯一一个不属于「两个子命令两个参数」
+	// 的入口，因为它必须存在。
+	if wantsHelp(args) {
+		fmt.Print("\n" + config.Usage())
+		return nil
+	}
 	if hasVersionFlag(args) {
 		fmt.Printf("pi-love-workbuddy-gateway %s\n", version)
 		return nil
 	}
-	cfg, err := config.Parse(args, os.Stderr)
+	cfg, err := config.Parse(args)
 	if err != nil {
 		return err
 	}
@@ -121,7 +129,7 @@ func runServe(cfg *config.Config, args []string) error {
 		Version:        version,
 		StartedAt:      startedAt,
 		Mode:           cfg.Mode,
-		RelayAddr:      config.RelayAddr(),
+		RelayAddr:      cfg.RelayAddr,
 		RelayEnabled:   parts.relay != nil,
 		TLSFingerprint: parts.fingerprint,
 		PSKHint:        parts.pskHint(),
@@ -148,37 +156,52 @@ func runServe(cfg *config.Config, args []string) error {
 		return err
 	}
 
-	// v0.3.0 起控制台与 API 分属两个端口。
-	// 理由：控制台含余额、请求日志（含被拦对话正文）与停止/重启按钮，
-	// 它绝不能跟着「可能被改成 0.0.0.0 的那个端口」一起暴露到局域网。
-	// 这里给 API 端口的根路径留一段说明，避免升级后用户以为服务坏了。
+	// 端口布局：同一个端口号，两种绑定。
+	//
+	//	127.0.0.1:<端口>   明文 HTTP，只给本机的 pi。pi 的配置在哪台机器上都不变。
+	//	<局域网IP>:<端口>  TLS + 密钥，给其他电脑的客户端连。
+	//
+	// 为什么不直接绑 0.0.0.0：那会把 127.0.0.1 一起占掉，本机 pi 就没地方放了。
+	// 为什么不干脆两个端口：用户只需要记一个号，其他电脑填「电脑A:这个号」。
 	apiMux := http.NewServeMux()
 	apiMux.Handle("/v1/", gatewayHandler.Handler())
 	apiMux.Handle("/health", gatewayHandler.Handler())
 	apiMux.HandleFunc("/", apiRootNotice(cfg.ConsoleAddr))
 
-	apiServer := &http.Server{
-		Addr:              cfg.ListenAddr,
-		Handler:           apiMux,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
+	apiServer := &http.Server{Handler: apiMux, ReadHeaderTimeout: 10 * time.Second}
 	consoleServer := &http.Server{
 		Addr:              cfg.ConsoleAddr,
 		Handler:           console.Handler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	// 转发端口与 API 端口要共用**同一个** gateway Handler 实例：
-	// 于是并发闸门、事件记录、拦截判定、促销标注自动一致，
-	// 而且结构上不存在「从转发进来的请求绕过了并发限制」这条路。
+	// 本机 pi 的口：明文，只绑 loopback。
+	localListener, err := listenOne(cfg.ListenAddr)
+	if err != nil {
+		return err
+	}
+
+	// 对外服务的口：TLS，逐个局域网网卡。
+	var relayListeners []net.Listener
 	var relayServer *http.Server
 	if parts.relay != nil {
+		addresses, expandErr := expandListenAddrs(cfg.RelayAddr)
+		if expandErr != nil {
+			return expandErr
+		}
 		parts.relay.SetBackend(gatewayHandler.Handler())
 		relayServer = &http.Server{
-			Addr:              config.RelayAddr(),
 			Handler:           parts.relay.Handler(),
 			TLSConfig:         relaytls.ServerConfig(parts.certificate),
 			ReadHeaderTimeout: 10 * time.Second,
+		}
+		for _, address := range addresses {
+			listener, listenErr := listenOne(address)
+			if listenErr != nil {
+				return listenErr
+			}
+			relayListeners = append(relayListeners, tls.NewListener(listener, relayServer.TLSConfig))
+			logger.Printf("对外    https://%s", address)
 		}
 	}
 
@@ -189,7 +212,7 @@ func runServe(cfg *config.Config, args []string) error {
 	}
 	logger.Printf("日志：%s", describeLogPath(appdir.LogPath()))
 	logger.Printf("事件：%s", describeLogPath(events.Path()))
-	logger.Printf("API     http://%s  （/v1/* 与 /health）", cfg.ListenAddr)
+	logger.Printf("pi 连   http://%s/v1", cfg.ListenAddr)
 	logger.Printf("控制台  http://%s/", cfg.ConsoleAddr)
 	if !isLoopbackAddr(cfg.ConsoleAddr) {
 		// 控制台含余额、请求日志（含被拦对话正文）与停止/重启按钮，
@@ -197,10 +220,10 @@ func runServe(cfg *config.Config, args []string) error {
 		logger.Printf("⚠️ 控制台未只绑本机：余额、请求日志与停止/重启按钮已暴露到该地址，请自行加认证")
 	}
 	if cfg.Mode == config.ModeClient {
-		logger.Printf("模式：客户端，转发到 %s", cfg.GatewayAddress)
+		logger.Printf("转发到  %s", cfg.GatewayAddress)
 	}
 	if parts.relay != nil {
-		logger.Printf("转发    https://%s  （已开放，需密钥与指纹确认）", config.RelayAddr())
+
 		logger.Printf("网关密钥：%s", parts.pskHint())
 	}
 	logger.Printf("提示：本软件为第三方工具，与腾讯 / WorkBuddy 无官方关联，" +
@@ -233,20 +256,21 @@ func runServe(cfg *config.Config, args []string) error {
 	}
 
 	serveErr := make(chan error, 1)
-	go func() { serveErr <- apiServer.ListenAndServe() }()
+	go func() { serveErr <- apiServer.Serve(localListener) }()
 	go func() {
 		if err := consoleServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serveErr <- fmt.Errorf("控制台监听失败：%w", err)
 		}
 	}()
-	if relayServer != nil {
-		go func() {
-			// 证书与私钥已在 tls.Config 里指定，这里两个文件名传空串。
-			if err := relayServer.ListenAndServeTLS("", ""); err != nil &&
+	for _, listener := range relayListeners {
+		go func(listener net.Listener) {
+			// 对外这个口服务的是 relay handler（带 PSK 准入），
+			// 不是本机那套 apiMux——否则局域网里的任何人都能用你的账号。
+			if err := relayServer.Serve(listener); err != nil &&
 				!errors.Is(err, http.ErrServerClosed) {
-				serveErr <- fmt.Errorf("转发服务监听失败：%w", err)
+				serveErr <- fmt.Errorf("对外服务监听失败：%w", err)
 			}
-		}()
+		}(listener)
 	}
 
 	// 等三种事：服务出错、收到退出信号、或者面板请求停止/重启。
@@ -266,7 +290,7 @@ func runServe(cfg *config.Config, args []string) error {
 	// 而且它会释放端口，重启时新进程才能立刻绑上。
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	// 控制台不对外，先关；转发与 API 可能有在途的流式请求，留到最后。
+	// 控制台不对外，先关；其余可能有在途的流式请求，留到最后。
 	_ = consoleServer.Shutdown(shutdownCtx)
 	if relayServer != nil {
 		_ = relayServer.Shutdown(shutdownCtx)
@@ -352,6 +376,16 @@ func describeLogPath(path string) string {
 		return "（未启用，只写标准输出）"
 	}
 	return path
+}
+
+// wantsHelp 判断命令行里有没有请求打印用法。
+func wantsHelp(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "-help" || arg == "--help" {
+			return true
+		}
+	}
+	return false
 }
 
 // hasVersionFlag 判断命令行里有没有请求打印版本号。
