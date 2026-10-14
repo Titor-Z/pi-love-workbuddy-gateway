@@ -198,152 +198,21 @@
 
   {#if !status}
     <div class="notice">正在读取…</div>
-  {:else if !isGateway}
-    <div class="notice">
-      当前是<strong>客户端模式</strong>，这台机器自己不提供多设备接入。
-      要连的网关地址、本设备名称见下方。
-    </div>
-    <div class="card tight">
-      <table>
-        <tbody>
-          <tr>
-            <th style="width:200px">运行模式</th>
-            <td class="num">客户端（转发到网关，不持有凭证）</td>
-          </tr>
-          <tr>
-            <th>网关地址</th>
-            <td class="num">{status.listen_addr ? "见启动参数 -gateway" : "—"}</td>
-          </tr>
-        </tbody>
-      </table>
-    </div>
-  {:else if !paired}
-    <!-- 客户端首次使用：先配对。密钥与指纹都在这里填、在这里比对，
-         不进命令行（会留在 shell history 与 ps 输出里）。 -->
-    <div class="notice">
-      本机还没和网关配对。填入网关控制台「多设备」页显示的<strong>网关密钥</strong>，
-      并比对证书指纹——比对过之后连接才成立。
-    </div>
-    {#if pairStep === "form"}
-      <div class="card tight">
-        <table>
-          <tbody>
-            <tr>
-              <th style="width:200px">网关地址</th>
-              <td>
-                <input
-                  type="text"
-                  placeholder="192.168.1.5:8790"
-                  bind:value={pairAddress}
-                  style="width:100%"
-                />
-              </td>
-            </tr>
-            <tr>
-              <th>网关密钥</th>
-              <td>
-                <input
-                  type="text"
-                  placeholder="网关控制台显示的那串"
-                  bind:value={pairKey}
-                  style="width:100%"
-                />
-              </td>
-            </tr>
-          </tbody>
-        </table>
-        <div class="actions" style="margin-top:12px">
-          <button class="action primary" onclick={probePairing} disabled={pairBusy}>
-            {pairBusy ? "连接中…" : "连接"}
-          </button>
-        </div>
-      </div>
-    {:else}
-      <div class="card tight">
-        <p>请到网关控制台的「多设备」页，核对下面这串指纹是否<strong>逐位一致</strong>：</p>
-        <p><code class="copyable">{pairFingerprint}</code></p>
-        <p class="dim">
-          不一致就<strong>不要</strong>确认——那说明你连上的不是你的网关。
-        </p>
-        <div class="actions" style="margin-top:12px">
-          <button class="action primary" onclick={confirmPairing} disabled={pairBusy}>
-            {pairBusy ? "保存中…" : "指纹一致，确认"}
-          </button>
-          <button class="action" onclick={() => (pairStep = "form")} disabled={pairBusy}>
-            返回
-          </button>
-        </div>
-      </div>
-    {/if}
-  {:else if !relay}
-    <div class="notice">正在读取转发服务状态…</div>
-  {:else if sync}
-    <!-- 客户端模式：显示凭证同步状态与能否切回网关模式。 -->
-    <div class="card tight">
-      <p>
-        本机是<strong>客户端</strong>，凭证由网关同步过来、加密存在本机。
-        它只在切到网关模式时才被使用。
-      </p>
-      <table>
-        <tbody>
-          <tr>
-            <th style="width:200px">网关凭证版本</th>
-            <td class="num">epoch {sync.gateway_epoch ?? "—"}</td>
-          </tr>
-          <tr>
-            <th>本机凭证版本</th>
-            <td class="num">{sync.local ? `epoch ${sync.local.local_epoch}` : "尚无副本"}</td>
-          </tr>
-          <tr>
-            <th>上次同步</th>
-            <td class="num">
-              {sync.local?.last_sync_at ? fmt.time(sync.local.last_sync_at) : "—"}
-            </td>
-          </tr>
-        </tbody>
-      </table>
-      <div class="actions" style="margin-top:12px">
-        <button class="action" onclick={syncNow}>立即同步</button>
-        <button class="action" onclick={checkSwitch} disabled={switching}>
-          {switching ? "检查中…" : "检查能否切到网关模式"}
-        </button>
-      </div>
-      {#if switchCheck}
-        {#if switchCheck.can_switch}
-          <div class="notice" style="margin-top:12px">
-            可以切换。点下面的按钮会用本机这份凭证写一份本地登录态，
-            之后停掉本进程、<strong>不带 <code>-mode client</code> 重新启动</strong>即可。
-          </div>
-          <div class="actions" style="margin-top:12px">
-            <button class="action primary" onclick={doSwitch} disabled={switching}>
-              {switching ? "处理中…" : "切换到网关模式"}
-            </button>
-          </div>
-        {:else}
-          <div class="notice warn" style="margin-top:12px">
-            {switchCheck.reason}
-          </div>
-        {/if}
-      {/if}
-    </div>
-
-    <div class="notice warn" style="margin-top:20px">
-      切到网关模式后，本机会<strong>开始自己刷新令牌</strong>。
-      回连局域网时若面板提示凭证冲突，说明网关那份更旧——由你选择用哪一份。
-      本机凭证比网关新时，同步不会覆盖它，也不会悄悄丢掉。
-    </div>
-  {:else if !relay.enabled}
+  {:else if isGateway}
+    {#if !relay}
+      <div class="notice">正在读取转发服务状态…</div>
+    {:else if !relay.enabled}
     <div class="card tight">
       <p>
         转发服务<strong>未开启</strong>。开启之后，局域网里的其他电脑才能用
-        <code>-mode client</code> 连过来，共用一个 WorkBuddy 账号。
+        <code>client</code> 子命令连过来，共用一个 WorkBuddy 账号。
       </p>
       <p class="dim">
         默认不开：只在一台机器上用的人不需要多一个对外监听口。
       </p>
       <button class="action primary" onclick={askToggle}>开启转发服务</button>
     </div>
-  {:else}
+    {:else}
     <div class="grid stats" style="margin-bottom:20px">
       <div class="stat">
         <div class="label"><span>已登记设备</span></div>
@@ -464,6 +333,122 @@
       <button class="action danger" onclick={askReset}>重置网关密钥</button>
       <button class="action" onclick={askToggle}>关闭转发服务</button>
     </div>
+    {/if}
+  {:else if !paired}
+    <!-- 客户端首次使用：先配对。密钥与指纹都在这里填、在这里比对，
+         不进命令行（会留在 shell history 与 ps 输出里）。 -->
+    <div class="notice">
+      本机还没和网关配对。填入网关控制台「多设备」页显示的<strong>网关密钥</strong>，
+      并比对证书指纹——比对过之后连接才成立。
+    </div>
+    {#if pairStep === "form"}
+      <div class="card tight">
+        <table>
+          <tbody>
+            <tr>
+              <th style="width:200px">网关地址</th>
+              <td>
+                <input
+                  type="text"
+                  placeholder="192.168.1.5:8790"
+                  bind:value={pairAddress}
+                  style="width:100%"
+                />
+              </td>
+            </tr>
+            <tr>
+              <th>网关密钥</th>
+              <td>
+                <input
+                  type="text"
+                  placeholder="网关控制台显示的那串"
+                  bind:value={pairKey}
+                  style="width:100%"
+                />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="actions" style="margin-top:12px">
+          <button class="action primary" onclick={probePairing} disabled={pairBusy}>
+            {pairBusy ? "连接中…" : "连接"}
+          </button>
+        </div>
+      </div>
+    {:else}
+      <div class="card tight">
+        <p>请到网关控制台的「多设备」页，核对下面这串指纹是否<strong>逐位一致</strong>：</p>
+        <p><code class="copyable">{pairFingerprint}</code></p>
+        <p class="dim">
+          不一致就<strong>不要</strong>确认——那说明你连上的不是你的网关。
+        </p>
+        <div class="actions" style="margin-top:12px">
+          <button class="action primary" onclick={confirmPairing} disabled={pairBusy}>
+            {pairBusy ? "保存中…" : "指纹一致，确认"}
+          </button>
+          <button class="action" onclick={() => (pairStep = "form")} disabled={pairBusy}>
+            返回
+          </button>
+        </div>
+      </div>
+    {/if}
+  {:else if sync}
+    <!-- 客户端模式：显示凭证同步状态与能否切回网关模式。 -->
+    <div class="card tight">
+      <p>
+        本机是<strong>客户端</strong>，凭证由网关同步过来、加密存在本机。
+        它只在切到网关模式时才被使用。
+      </p>
+      <table>
+        <tbody>
+          <tr>
+            <th style="width:200px">网关凭证版本</th>
+            <td class="num">epoch {sync.gateway_epoch ?? "—"}</td>
+          </tr>
+          <tr>
+            <th>本机凭证版本</th>
+            <td class="num">{sync.local ? `epoch ${sync.local.local_epoch}` : "尚无副本"}</td>
+          </tr>
+          <tr>
+            <th>上次同步</th>
+            <td class="num">
+              {sync.local?.last_sync_at ? fmt.time(sync.local.last_sync_at) : "—"}
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div class="actions" style="margin-top:12px">
+        <button class="action" onclick={syncNow}>立即同步</button>
+        <button class="action" onclick={checkSwitch} disabled={switching}>
+          {switching ? "检查中…" : "检查能否切到网关模式"}
+        </button>
+      </div>
+      {#if switchCheck}
+        {#if switchCheck.can_switch}
+          <div class="notice" style="margin-top:12px">
+            可以切换。点下面的按钮会用本机这份凭证写一份本地登录态，
+            之后停掉本进程、<strong>不带 <code>client</code> 子命令重新启动</strong>即可。
+          </div>
+          <div class="actions" style="margin-top:12px">
+            <button class="action primary" onclick={doSwitch} disabled={switching}>
+              {switching ? "处理中…" : "切换到网关模式"}
+            </button>
+          </div>
+        {:else}
+          <div class="notice warn" style="margin-top:12px">
+            {switchCheck.reason}
+          </div>
+        {/if}
+      {/if}
+    </div>
+
+    <div class="notice warn" style="margin-top:20px">
+      切到网关模式后，本机会<strong>开始自己刷新令牌</strong>。
+      回连局域网时若面板提示凭证冲突，说明网关那份更旧——由你选择用哪一份。
+      本机凭证比网关新时，同步不会覆盖它，也不会悄悄丢掉。
+    </div>
+  {:else}
+    <div class="notice">正在读取凭证同步状态…</div>
   {/if}
 </section>
 

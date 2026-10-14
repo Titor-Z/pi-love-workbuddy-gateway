@@ -22,3 +22,6 @@ web/node_modules/
 
 # 编译产物
 /pi-love-workbuddy-gateway
+
+# 本地编译产物
+/pi-love-workbuddy-gateway
