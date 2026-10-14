@@ -10,13 +10,11 @@ import (
 // 超过就丢弃这一行，避免一个畸形响应把内存吃光。
 const observerLineLimit = 1 << 20
 
-// filterMarkers 是后端内容审核命中时会在响应里出现的特征串。
-// 后端并不总是用 HTTP 错误表示拦截，很多时候是正常 200 + 一段特殊文案，
-// 所以只能在字节流里观察。
-var filterMarkers = [][]byte{
-	[]byte("content-filter"),
-	[]byte("敏感"),
-	[]byte("审核"),
+// blockedFinishReasons 是后端明确告知「这条内容被安全策略拦下」的结束原因。
+// 普通的礼貌拒答（「抱歉我不能……」）后端给的是 "stop"，和正常回复一样，
+// 没有结构上的区分信号——那种情况我们**无法**可靠识别，也不假装能。
+var blockedFinishReasons = map[string]bool{
+	"content_filter": true,
 }
 
 // usageInfo 是后端在 SSE 里回传的用量。
@@ -51,15 +49,15 @@ func (u usageInfo) Cached() int {
 
 // streamObserver 在把字节原样透传的同时，顺带观察两件事：
 //
-//  1. 响应里有没有出现内容审核标记（跨块匹配，SSE 分片会在任意字节处断开）；
+//  1. 响应是否被后端的内容安全策略拦下（依据 finish_reason=content_filter 或
+//     refusal 非空——这是后端给出的结构信号，见 blockedFinishReasons 与 handleLine）；
 //  2. SSE 里回传的用量与结束原因（面板统计用）。
 //
 // 它只读不写，绝不改动流的内容本身。
 type streamObserver struct {
 	source io.Reader
 
-	tail    []byte // 上一块末尾的残留，用于匹配被块边界切断的关键字
-	blocked bool   // 是否已命中审核标记
+	blocked bool // 是否已命中内容审核结构信号（finish_reason=content_filter 或 refusal 非空）
 
 	lineBuf      []byte // 尚未凑齐整行的 SSE 残留
 	usage        *usageInfo
@@ -76,9 +74,7 @@ func newStreamObserver(source io.Reader) *streamObserver {
 func (o *streamObserver) Read(p []byte) (int, error) {
 	n, err := o.source.Read(p)
 	if n > 0 {
-		chunk := p[:n]
-		o.scanMarkers(chunk)
-		o.scanLines(chunk)
+		o.scanLines(p[:n])
 	}
 	return n, err
 }
@@ -104,20 +100,6 @@ func (o *streamObserver) FinishReason() string {
 
 // ToolNames 返回本次响应里调用过的工具名，仅用于展示。
 func (o *streamObserver) ToolNames() []string { return o.toolNames }
-
-// scanMarkers 拼上上一块的尾部后匹配关键字，再保留新的尾部供下一块使用。
-func (o *streamObserver) scanMarkers(chunk []byte) {
-	if !o.blocked {
-		window := append(append([]byte{}, o.tail...), chunk...)
-		for _, marker := range filterMarkers {
-			if bytes.Contains(window, marker) {
-				o.blocked = true
-				break
-			}
-		}
-		o.tail = trimmedTail(window, maxMarkerLength())
-	}
-}
 
 // scanLines 把字节流按行切开，逐行交给 SSE 解析。
 func (o *streamObserver) scanLines(chunk []byte) {
@@ -154,6 +136,9 @@ func (o *streamObserver) handleLine(line []byte) {
 		Choices []struct {
 			FinishReason string `json:"finish_reason"`
 			Delta        struct {
+				// Refusal 是后端对「拒绝输出这部分内容」的结构标记。
+				// 正常回复里它也会出现，但恒为空串；非空才表示真被拦。
+				Refusal   string `json:"refusal"`
 				ToolCalls []struct {
 					Function struct {
 						Name string `json:"name"`
@@ -171,6 +156,12 @@ func (o *streamObserver) handleLine(line []byte) {
 	for _, choice := range chunk.Choices {
 		if choice.FinishReason != "" {
 			o.finishReason = choice.FinishReason
+			if blockedFinishReasons[choice.FinishReason] {
+				o.blocked = true
+			}
+		}
+		if choice.Delta.Refusal != "" {
+			o.blocked = true
 		}
 		for _, call := range choice.Delta.ToolCalls {
 			if name := call.Function.Name; name != "" {
@@ -178,23 +169,4 @@ func (o *streamObserver) handleLine(line []byte) {
 			}
 		}
 	}
-}
-
-// trimmedTail 保留末尾若干字节，供下一块拼接比对。
-func trimmedTail(window []byte, keep int) []byte {
-	if len(window) <= keep {
-		return window
-	}
-	return window[len(window)-keep:]
-}
-
-// maxMarkerLength 返回最长标记的字节数减一，作为跨块比对的窗口大小。
-func maxMarkerLength() int {
-	longest := 0
-	for _, marker := range filterMarkers {
-		if len(marker) > longest {
-			longest = len(marker)
-		}
-	}
-	return longest - 1
 }

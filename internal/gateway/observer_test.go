@@ -46,41 +46,50 @@ func TestFilterWatchReaderPassesBytesThrough(t *testing.T) {
 	}
 }
 
-// TestFilterWatchReaderDetectsMarkers 三种特征串都要能认出来。
-func TestFilterWatchReaderDetectsMarkers(t *testing.T) {
-	cases := map[string]string{
-		"content-filter 标记": `{"finish_reason":"content-filter"}`,
-		"中文敏感字样":            `{"content":"这个话题有点敏感"}`,
-		"中文审核字样":            `{"content":"内容审核未通过"}`,
+// TestObserverFlagsContentFilter 后端明确告知「被安全策略拦下」时
+// （finish_reason=content_filter）才算命中。这是结构信号，不是正文里有什么字。
+func TestObserverFlagsContentFilter(t *testing.T) {
+	if !drain(t, []byte(`data: {"choices":[{"delta":{},"finish_reason":"content_filter"}]}`+"\n")).Blocked() {
+		t.Error("finish_reason=content_filter 应当命中")
 	}
-	for name, payload := range cases {
-		if !drain(t, []byte(payload)).Blocked() {
-			t.Errorf("%s：应当命中", name)
+}
+
+// TestObserverFlagsNonEmptyRefusal 后端在 delta 里给非空 refusal 时命中。
+// 正常回复的 refusal 是空串，不算。
+func TestObserverFlagsNonEmptyRefusal(t *testing.T) {
+	if !drain(t, []byte(`data: {"choices":[{"delta":{"refusal":"我无法提供该内容"}}]}`+"\n")).Blocked() {
+		t.Error("非空 refusal 应当命中")
+	}
+}
+
+// TestObserverIgnoresNormalResponse 正常回复（无论有没有敏感词）都不该误报——
+// 否则「拦截率」统计毫无意义。后端对礼貌拒答给的是 finish_reason=stop，
+// 和正常回复一样，没有结构区分，我们不假装能识别。
+func TestObserverIgnoresNormalResponse(t *testing.T) {
+	cases := []string{
+		`{"model":"glm-5.3","choices":[{"delta":{"content":"你好，今天天气不错"}}]}`,
+		`{"choices":[{"delta":{"content":"这个话题有点敏感"}}]}`,
+		`{"choices":[{"delta":{"content":"内容审核未通过"}}]}`,
+		`{"choices":[{"delta":{"reasoning_content":"敏感"}}]}`,
+		`{"choices":[{"delta":{"refusal":""}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"stop"}]}`,
+	}
+	for i, payload := range cases {
+		if drain(t, []byte(payload+"\n")).Blocked() {
+			t.Errorf("用例 %d 被误判为拦截：%s", i, payload)
 		}
 	}
 }
 
-// TestFilterWatchReaderIgnoresNormalResponse 正常回复不该误报，
-// 否则拦截率统计毫无意义。
-func TestFilterWatchReaderIgnoresNormalResponse(t *testing.T) {
-	payload := []byte(`{"model":"glm-5.3","choices":[{"delta":{"content":"你好，今天天气不错"}}]}`)
-	if drain(t, []byte(payload)).Blocked() {
-		t.Error("正常回复被误判为拦截")
-	}
-}
-
-// TestFilterWatchReaderMatchesAcrossChunks 关键字被读取边界切断时不能漏检。
-// 这是本观察器唯一真正棘手的点：SSE 分片完全可能在任意字节处断开。
-func TestFilterWatchReaderMatchesAcrossChunks(t *testing.T) {
+// TestObserverBlockedSpansChunks 命中信号被读取边界切断时不能漏检。
+// SSE 分片完全可能在任意字节处断开，这不是理论情况。
+func TestObserverBlockedSpansChunks(t *testing.T) {
 	cases := []struct {
 		name   string
 		chunks []string
 	}{
-		{"ASCII 关键字一分为二", []string{`{"finish_reason":"content-`, `filter"}`}},
-		{"ASCII 关键字逐字节", []string{"c", "o", "n", "t", "e", "n", "t", "-", "f", "i", "l", "t", "e", "r"}},
-		// "敏感" 的 UTF-8 是 e6 95 8f e6 84 9f，在中间切断。
-		{"中文关键字跨块", []string{"有点\u654f", "\u611f的样子"}},
-		{"中文关键字逐字节", []string{"\xe6", "\x95", "\x8f", "\xe6", "\x84", "\x9f"}},
+		{"finish_reason 跨块", []string{`data: {"choices":[{"delta":{},"finish_rea`, `son":"content_filter"}]}`+"\n"}},
+		{"refusal 跨块", []string{`data: {"choices":[{"delta":{"re`, `fusal":"我无法"}}]}`+"\n"}},
 	}
 	for _, testCase := range cases {
 		chunks := make([][]byte, 0, len(testCase.chunks))
@@ -88,15 +97,14 @@ func TestFilterWatchReaderMatchesAcrossChunks(t *testing.T) {
 			chunks = append(chunks, []byte(part))
 		}
 		if !drain(t, chunks...).Blocked() {
-			t.Errorf("%s：跨块的关键字漏检了", testCase.name)
+			t.Errorf("%s：跨块的信号漏检了", testCase.name)
 		}
 	}
 }
 
-// TestFilterWatchReaderStopsAfterFirstHit 命中之后不再重复判断，
-// 结果稳定可重复读。
-func TestFilterWatchReaderStopsAfterFirstHit(t *testing.T) {
-	watch := drain(t, []byte("content-filter"), []byte("无关内容"))
+// TestObserverStopsAfterFirstHit 命中之后不再重复判断，结果稳定可重复读。
+func TestObserverStopsAfterFirstHit(t *testing.T) {
+	watch := drain(t, []byte(`data: {"choices":[{"delta":{},"finish_reason":"content_filter"}]}`+"\n"))
 	if !watch.Blocked() || !watch.Blocked() {
 		t.Error("命中后应持续返回 true")
 	}
@@ -133,8 +141,7 @@ func TestObserverUsageSpansChunks(t *testing.T) {
 	}
 }
 
-// TestObserverUsageIsLastOneWins 后端在流末尾会再发一次用量，
-// 以最后一次为准。
+// TestObserverUsageIsLastOneWins 后端在流末尾会再发一次用量，以最后一次为准。
 func TestObserverUsageIsLastOneWins(t *testing.T) {
 	observer := drain(t,
 		[]byte(`data: {"choices":[],"usage":{"credit":0.01}}`+"\n"),
@@ -169,26 +176,17 @@ func TestObserverCollectsToolNames(t *testing.T) {
 	}
 }
 
-// TestObserverIgnoresGarbageLines 畸形行不能影响观察，也不能 panic。
-func TestObserverIgnoresGarbageLines(t *testing.T) {
+// TestObserverBadLineDoesNotPoisonUsageScan 畸形行不能影响用量解析，也不能 panic。
+func TestObserverBadLineDoesNotPoisonUsageScan(t *testing.T) {
 	observer := drain(t,
-		[]byte(": 注释行\n"),
-		[]byte("data: {不是 JSON\n"),
-		[]byte("data:\n"),
-		[]byte("data: [DONE]\n"),
+		[]byte(`: 注释行`+"\n"),
+		[]byte(`data: {不是 JSON`+"\n"),
+		[]byte(`data:`+"\n"),
+		[]byte(`data: [DONE]`+"\n"),
 		[]byte(`data: {"choices":[],"usage":{"credit":0.5}}`+"\n"),
 	)
 	if observer.Usage().Credit != 0.5 {
 		t.Errorf("坏行之后的数据丢了：%+v", observer.Usage())
-	}
-}
-
-// TestObserverBadLineDoesNotPoisonMarkerScan 审核标记与用量解析是两套独立机制，
-// 一边解析失败不该拖累另一边。
-func TestObserverBadLineDoesNotPoisonMarkerScan(t *testing.T) {
-	observer := drain(t, []byte(`data: {"content":"这个话题敏感"}`+"\n"))
-	if !observer.Blocked() {
-		t.Error("跨机制影响：审核标记漏检了")
 	}
 }
 

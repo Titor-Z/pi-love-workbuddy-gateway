@@ -192,10 +192,11 @@
     {/if}
   {:else}
     <div class="notice warn">
-      <strong>关于「被拦截」</strong>：WorkBuddy 后端命中内容审核时，有时会在流里
-      嵌入提示文字而不是返回错误码。本工具会在转发的同时扫一遍响应，命中就标记出来，
-      <strong>不改动任何字节</strong>——pi 收到的内容与后端发来的完全一致。
-      因为这个标记是事后打上的，偶尔会有误报或漏报，只能当参考。
+      <strong>关于「被拦截」</strong>：本工具只把后端给出的<strong>结构信号</strong>当作拦截——
+      <code>finish_reason=content_filter</code> 或非空 <code>refusal</code>。除此之外后端并不会在
+      流里给出可靠标记，所以<strong>礼貌拒答（「抱歉我不能……」）不会被计入</strong>，这是有意为之，
+      不要把它当成漏报。<strong>不改动任何字节</strong>——pi 收到的内容与后端发来的完全一致。
+      因为这个标记只看结构信号，少数情况后端用非标准字段告知拦截时会漏记，只能当参考。
     </div>
 
     {#if loading && events.length === 0}

@@ -114,7 +114,7 @@ func (s *Server) finishChat(modelName string, observer *streamObserver,
 	}
 	blockedTag := ""
 	if observer.Blocked() {
-		blockedTag = " | ⚠️疑似内容审核拦截"
+		blockedTag = " | ⚠️命中内容审核"
 	}
 	message := fmt.Sprintf("◀ %s | %s | %s完成 | credit=%g%s%s",
 		modelName, cost, mode, usage.Credit, cacheTag, blockedTag)
