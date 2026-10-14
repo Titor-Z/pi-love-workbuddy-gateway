@@ -23,6 +23,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/panel"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relaytls"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/upstream"
 )
 
@@ -84,6 +85,11 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
+	// 配对要早于派生：它是一次性动作，结果要在前台打印给用户看，
+	// 派生之后就没人能读到那行输出了。
+	if cfg.Mode == config.ModeClient && (cfg.Probe || cfg.Trust != "") {
+		return runPairing(cfg)
+	}
 	// 后台模式：派生一个脱离终端的子进程，父进程随即退出。
 	// 子进程带着 daemon.IsChild() 为真，因此不会再次派生。
 	if cfg.Daemon && !daemon.IsChild() {
@@ -115,38 +121,52 @@ func runServe(cfg *config.Config, args []string) error {
 	}
 	defer logger.Close()
 
-	cred, cipher, err := buildCredential(cfg, logger.Printf)
-	if err != nil {
-		return err
-	}
 	promotions, err := catalog.LoadPromotions(resolvePromotionsPath(cfg))
 	if err != nil {
 		return err
 	}
-	events, err := journal.Open(cfg.JournalPath)
+	events, err := journal.Open(journalPathForMode(cfg))
 	if err != nil {
 		return err
 	}
 	defer events.Close()
 
-	// 网关与面板共用一个上游客户端：两条路径共用令牌续期与重试逻辑。
-	client := upstream.NewClient(cred, "")
+	// 两种模式的差别只在这里：谁去取数据。
+	// 之后的一切（网关 Handler、面板、HTTP 服务）完全一样。
+	parts, err := buildRuntime(cfg, logger)
+	if err != nil {
+		return err
+	}
 	startedAt := time.Now()
 
-	gatewayHandler := gateway.NewServer(cfg, cred, client, promotions, logger, events)
+	// 并发闸门只对持有凭证的那一侧有意义：
+	// 客户端模式的请求在网关那里已经排过队，这里再限一次
+	// 只会让人以为网关坏了。
+	maxConcurrent := cfg.MaxConcurrent
+	if cfg.Mode == config.ModeClient {
+		maxConcurrent = 0
+	}
+	gatewayHandler := gateway.NewServer(cfg, parts.credential, parts.backend, promotions, logger, events, maxConcurrent)
 	control := panel.NewControl()
 	console, err := panel.New(panel.Deps{
 		Version:        version,
 		StartedAt:      startedAt,
-		AuthFile:       cred.Path(),
+		Mode:           cfg.Mode,
+		RelayAddr:      cfg.RelayAddr,
+		RelayEnabled:   cfg.RelayEnabled,
+		TLSFingerprint: parts.fingerprint,
+		PSKHint:        parts.pskHint(),
+		Device:         parts.device,
+		Devices:        parts.devices,
+		AuthFile:       parts.authFile,
 		ListenAddr:     cfg.ListenAddr,
 		ConsoleAddr:    cfg.ConsoleAddr,
 		LogPath:        cfg.LogPath,
-		JournalPath:    cfg.JournalPath,
+		JournalPath:    events.Path(),
 		PromotionsPath: resolvePromotionsPath(cfg),
-		Credential:     cred,
-		Upstream:       client,
-		Billing:        billing.NewClient(cred, ""),
+		Credential:     parts.credential,
+		Upstream:       parts.backend,
+		Billing:        parts.billing,
 		Promotions:     promotions,
 		Journal:        events,
 		Logger:         logger,
@@ -176,11 +196,27 @@ func runServe(cfg *config.Config, args []string) error {
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
+	// 转发端口与 API 端口要共用**同一个** gateway Handler 实例：
+	// 于是并发闸门、事件记录、拦截判定、促销标注自动一致，
+	// 而且结构上不存在「从转发进来的请求绕过了并发限制」这条路。
+	var relayServer *http.Server
+	if parts.relay != nil {
+		parts.relay.SetBackend(gatewayHandler.Handler())
+		relayServer = &http.Server{
+			Addr:              cfg.RelayAddr,
+			Handler:           parts.relay.Handler(),
+			TLSConfig:         relaytls.ServerConfig(parts.certificate),
+			ReadHeaderTimeout: 10 * time.Second,
+		}
+	}
+
 	logger.Printf("版本：%s", version)
-	logger.Printf("登录态：%s", cred.Path())
-	logger.Printf("密钥指纹：%s", cipher.KeyID())
+	if parts.credential != nil {
+		logger.Printf("登录态：%s", parts.authFile)
+		logger.Printf("密钥指纹：%s", parts.keyID)
+	}
 	logger.Printf("日志：%s", describeLogPath(cfg.LogPath))
-	logger.Printf("事件：%s", describeLogPath(cfg.JournalPath))
+	logger.Printf("事件：%s", describeLogPath(events.Path()))
 	logger.Printf("API     http://%s  （/v1/* 与 /health）", cfg.ListenAddr)
 	logger.Printf("控制台  http://%s/", cfg.ConsoleAddr)
 	if !isLoopbackAddr(cfg.ConsoleAddr) {
@@ -189,7 +225,15 @@ func runServe(cfg *config.Config, args []string) error {
 		logger.Printf("⚠️ 控制台未只绑本机：余额、请求日志与停止/重启按钮已暴露到该地址，请自行加认证")
 	}
 	if cfg.APIKey != "" {
-		logger.Printf("已启用本地访问密钥校验（仅作用于 API 端口，不作用于控制台）")
+		logger.Printf("已启用本地访问密钥校验（仅作用于 API 端口，不作用于控制台与转发端口）")
+	}
+	if cfg.Mode == config.ModeClient {
+		logger.Printf("模式：客户端，转发到 %s", cfg.GatewayURL)
+		logger.Printf("提示：客户端模式不持有 WorkBuddy 凭证，因此现在还不能脱离网关独立工作")
+	}
+	if parts.relay != nil {
+		logger.Printf("转发    https://%s  （已开放，需密钥与指纹确认）", cfg.RelayAddr)
+		logger.Printf("网关密钥：%s", parts.pskHint())
 	}
 	logger.Printf("提示：本软件为第三方工具，与腾讯 / WorkBuddy 无官方关联，" +
 		"使用风险自负；完整条款见 README 的《免责声明》。")
@@ -207,6 +251,15 @@ func runServe(cfg *config.Config, args []string) error {
 			serveErr <- fmt.Errorf("控制台监听失败：%w", err)
 		}
 	}()
+	if relayServer != nil {
+		go func() {
+			// 证书与私钥已在 tls.Config 里指定，这里两个文件名传空串。
+			if err := relayServer.ListenAndServeTLS("", ""); err != nil &&
+				!errors.Is(err, http.ErrServerClosed) {
+				serveErr <- fmt.Errorf("转发服务监听失败：%w", err)
+			}
+		}()
+	}
 
 	// 等三种事：服务出错、收到退出信号、或者面板请求停止/重启。
 	var action panel.Action
@@ -225,8 +278,11 @@ func runServe(cfg *config.Config, args []string) error {
 	// 而且它会释放端口，重启时新进程才能立刻绑上。
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	// 控制台不对外，先关；API 可能有在途的流式请求，留到最后。
+	// 控制台不对外，先关；转发与 API 可能有在途的流式请求，留到最后。
 	_ = consoleServer.Shutdown(shutdownCtx)
+	if relayServer != nil {
+		_ = relayServer.Shutdown(shutdownCtx)
+	}
 	shutdownErr := apiServer.Shutdown(shutdownCtx)
 
 	switch action {

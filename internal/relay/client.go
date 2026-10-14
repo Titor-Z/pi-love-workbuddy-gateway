@@ -1,0 +1,243 @@
+package relay
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"strings"
+	"time"
+
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relaytls"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/upstream"
+)
+
+// Config 是客户端侧的转发配置。
+type Config struct {
+	// BaseURL 形如 https://192.168.1.5:8790，不含结尾斜杠。
+	BaseURL string
+	// PSK 是网关控制台给出的接入密钥。
+	PSK string
+	// Fingerprint 是已确认过的网关证书指纹；为空则拒绝连接。
+	Fingerprint string
+	// Device 是本设备身份，随每个请求一起送出用于审计。
+	Device *identity.Device
+	// Client 允许注入自定义的 http.Client，仅测试使用。
+	Client *http.Client
+}
+
+// Client 把请求转发给网关。它实现 gateway.Backend，
+// 因此 client 模式下的 gateway.Server 完全不知道自己手上没有凭证。
+type Client struct {
+	cfg  Config
+	http *http.Client
+}
+
+// NewClient 构造转发客户端。三件事缺一不可：网关地址、密钥、已确认的指纹。
+func NewClient(cfg Config) (*Client, error) {
+	base, err := normalizeBaseURL(cfg.BaseURL)
+	if err != nil {
+		return nil, err
+	}
+	cfg.BaseURL = base
+	if cfg.PSK == "" {
+		return nil, fmt.Errorf("尚未填入网关密钥")
+	}
+	if cfg.Fingerprint == "" {
+		// 为空意味着「谁都可以冒充网关」——与明文没有区别，不能放行。
+		return nil, fmt.Errorf("尚未确认网关证书指纹")
+	}
+	if cfg.Device == nil || cfg.Device.ID == "" {
+		return nil, fmt.Errorf("设备身份未初始化")
+	}
+	httpClient := cfg.Client
+	if httpClient == nil {
+		httpClient = &http.Client{
+			// 不设 Timeout：流式响应要能一直开着，何时结束由 ctx 决定。
+			// 拨号与握手的超时在 Transport 里单独设。
+			Transport: relaytls.Transport(cfg.Fingerprint),
+		}
+	}
+	return &Client{cfg: cfg, http: httpClient}, nil
+}
+
+// ChatStream 转发一次对话补全，返回尚未读取的原始响应。
+//
+// 请求体**不做任何解析与改写**：改写（developer→system、字段白名单）已经在
+// 客户端本地的 gateway.Server 里做过了，在这里再做一遍是重复且危险的。
+func (c *Client) ChatStream(ctx context.Context, body []byte) (*http.Response, error) {
+	request, err := c.newRequest(ctx, http.MethodPost, "/v1/chat/completions",
+		bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+
+	response, err := c.http.Do(request)
+	if err != nil {
+		return nil, translateError(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		// 这里的错误体已经是网关写好的结构，原样放到上层去。
+		return response, nil
+	}
+	return response, nil
+}
+
+// Models 拉取网关侧的实时模型目录。
+func (c *Client) Models(ctx context.Context) ([]upstream.ModelInfo, error) {
+	request, err := c.newRequest(ctx, http.MethodGet, "/v1/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := c.http.Do(request)
+	if err != nil {
+		return nil, translateError(err)
+	}
+	defer response.Body.Close()
+
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
+	if err != nil {
+		return nil, translateError(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, errorsFromBody(response.StatusCode, raw)
+	}
+
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+			// WorkBuddy 扩展对象里有倍率与促销信息，用标记时要读它。
+			WorkBuddy struct {
+				Label string `json:"label"`
+			} `json:"workbuddy"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return nil, fmt.Errorf("网关返回的模型目录不是合法 JSON：%w", err)
+	}
+	models := make([]upstream.ModelInfo, 0, len(payload.Data))
+	for _, item := range payload.Data {
+		if item.ID == "" {
+			continue
+		}
+		models = append(models, upstream.ModelInfo{ID: item.ID})
+	}
+	return models, nil
+}
+
+// Ping 确认网关是否可达且协议版本一致。UI 用它显示「网关在线」。
+func (c *Client) Ping(ctx context.Context) error {
+	request, err := c.newRequest(ctx, http.MethodGet, pingPath, nil)
+	if err != nil {
+		return err
+	}
+	response, err := c.http.Do(request)
+	if err != nil {
+		return translateError(err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
+		return errorsFromBody(response.StatusCode, raw)
+	}
+	return nil
+}
+
+// newRequest 构造带鉴权头的请求。
+func (c *Client) newRequest(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	request, err := http.NewRequestWithContext(ctx, method, c.cfg.BaseURL+path, body)
+	if err != nil {
+		return nil, fmt.Errorf("构造转发请求失败：%w", err)
+	}
+	request.Header.Set(HeaderPSK, c.cfg.PSK)
+	request.Header.Set(HeaderDevice, c.cfg.Device.ID)
+	if name := strings.TrimSpace(c.cfg.Device.Name); name != "" {
+		request.Header.Set(HeaderDeviceName, name)
+	}
+	return request, nil
+}
+
+// translateError 把传输层的错误翻译成用户能看懂的话。
+// 区分「网关没回应」和「网关不接受我们」，这两种情况的处理方式完全不同。
+func translateError(err error) error {
+	message := err.Error()
+	switch {
+	case strings.Contains(message, "网关证书已变化"):
+		return fmt.Errorf("%s", message)
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("网关没有响应（等待超时）：%w", err)
+	default:
+		return fmt.Errorf("无法连接网关：%w", err)
+	}
+}
+
+// errorsFromBody 把网关的错误响应翻译成本地错误。
+func errorsFromBody(code int, body []byte) error {
+	var payload struct {
+		Error struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+		} `json:"error"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil || payload.Error.Message == "" {
+		return fmt.Errorf("网关返回 HTTP %d：%s", code, truncate(string(body)))
+	}
+	return fmt.Errorf("%s", payload.Error.Message)
+}
+
+// maxErrorBody 是读取错误响应体的上限，避免异常响应撑爆内存。
+const maxErrorBody = 64 << 10
+
+// truncate 截断过长的错误正文。
+func truncate(text string) string {
+	const limit = 300
+	text = strings.TrimSpace(text)
+	runes := []rune(text)
+	if len(runes) <= limit {
+		return text
+	}
+	return string(runes[:limit]) + "…"
+}
+
+// deadline 是客户端侧给网关的响应上限。
+// 只用于判断是否算「网关没回应」，与流式时长无关——流式由调用方的 ctx 控制。
+const deadline = 30 * time.Second
+
+// normalizeBaseURL 规整网关地址：补 https://、去掉结尾斜杠。
+//
+// 用户的输入可能带也可能不带协议前缀，补一是省掉一条没意义的报错；
+// 但绝不默认 http：请求正文会经过局域网，明文等于把账号与对话内容一起播出去。
+func normalizeBaseURL(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return "", fmt.Errorf("尚未指定网关地址")
+	}
+	if !strings.Contains(value, "://") {
+		// 没有协议前缀时只允许「主机:端口」这一种写法。
+		// 带 / 或 ? 的裸输入会被 https:// 前缀曲解成另一个地址
+		// （h:8790/x 会变成 https://h:8790/x，用户以为的路径其实是主机的一部分）。
+		// 宁可让他写全，也不要猜。
+		if strings.ContainsAny(value, "/?") {
+			return "", fmt.Errorf("请写完整的网关地址，形如 https://192.168.1.5:8790（当前是 %q）", raw)
+		}
+		value = "https://" + value
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return "", fmt.Errorf("网关地址无法解析：%w", err)
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("网关地址 %q 里没有主机部分", raw)
+	}
+	if parsed.Scheme != "https" {
+		return "", fmt.Errorf("网关地址必须是 https（当前是 %s）："+
+			"请求正文会经过局域网，明文等于把账号与对话内容一起播出去", parsed.Scheme)
+	}
+	return strings.TrimSuffix(parsed.Scheme+"://"+parsed.Host+parsed.Path, "/"), nil
+}

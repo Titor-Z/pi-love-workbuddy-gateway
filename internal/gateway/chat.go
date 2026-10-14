@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/blocked"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 )
 
@@ -42,6 +43,17 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 闸门在这里而不是在 Backend 里：网关的两个入口（本机 API、局域网 relay）
+	// 共用同一个 Handler，所以排队对两者都生效、也都不可能被绕过。
+	release, err := s.gate.Acquire(r.Context())
+	if err != nil {
+		// 排不上就不该再往下走：让请求飞到后端去被随机 429 拒绝，
+		// 结果既不可预期、也没法向用户解释。
+		writeBusy(w)
+		return
+	}
+	defer release()
+
 	upstreamBody, err := json.Marshal(buildUpstreamBody(clientBody))
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", err.Error())
@@ -50,6 +62,9 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	modelName := defaultIfEmpty(stringField(clientBody, "model"), defaultModel)
 	streaming := wantsStream(clientBody)
 	started := time.Now()
+	// 设备 ID 从上下文取（relay 中间件注入，本机直连为空）。
+	// 存在请求本地变量而不是包级变量：多设备并发时包级变量会互相覆盖。
+	deviceID := identity.DeviceFrom(r.Context())
 	s.logger.Printf("▶ %s | stream=%v", modelName, streaming)
 
 	resp, err := s.up.ChatStream(r.Context(), upstreamBody)
@@ -60,7 +75,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		// 什么都看不到，用户只感觉到"没反应"。现在同样记一条，并留存请求正文，
 		// 让抽屉能回答「我刚才发了什么、为什么没动静」。
 		s.recordChat(journal.Record{
-			Kind: journal.KindChat, Model: modelName, Stream: streaming,
+			Kind: journal.KindChat, Model: modelName, Device: deviceID, Stream: streaming,
 			Status: http.StatusBadGateway, Millis: time.Since(started).Milliseconds(),
 			Message: message, Error: err.Error(),
 			Request: summarizeRequest(clientBody), RequestText: requestPayload(clientBody),
@@ -92,7 +107,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		reqText := requestPayload(clientBody)
 
 		s.recordChat(journal.Record{
-			Kind: journal.KindChat, Model: modelName, Stream: streaming,
+			Kind: journal.KindChat, Model: modelName, Device: deviceID, Stream: streaming,
 			Status: resp.StatusCode, Millis: time.Since(started).Milliseconds(),
 			Message: message, Error: msg,
 			Blocked: policyVerdict.Blocked, BlockedReason: string(policyVerdict.Reason),
@@ -108,7 +123,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	observer := newStreamObserver(resp.Body)
 	if streaming {
 		s.relayStream(w, observer)
-		s.finishChat(modelName, observer, started, true, http.StatusOK, "", clientBody)
+		s.finishChat(modelName, deviceID, observer, started, true, http.StatusOK, "", clientBody)
 		return
 	}
 	result, err := aggregateStream(observer)
@@ -116,7 +131,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		message := fmt.Sprintf("✗ 聚合流式响应失败 | %s | %v", modelName, err)
 		s.logger.Printf("%s", message)
 		s.recordChat(journal.Record{
-			Kind: journal.KindChat, Model: modelName,
+			Kind: journal.KindChat, Model: modelName, Device: deviceID,
 			Status: http.StatusBadGateway, Millis: time.Since(started).Milliseconds(),
 			Message: message, Error: err.Error(),
 			Request: summarizeRequest(clientBody), RequestText: requestPayload(clientBody),
@@ -124,14 +139,14 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
 	}
-	s.finishChat(modelName, observer, started, false, http.StatusOK, "", clientBody)
+	s.finishChat(modelName, deviceID, observer, started, false, http.StatusOK, "", clientBody)
 	writeJSON(w, http.StatusOK, result)
 }
 
 // finishChat 在请求结束时记一条事件，并补一条人类可读的日志。
 // 流式与非流式共用同一条记录路径，避免两边统计口径不一致。
 // clientBody 只用于请求侧轻量摘要，不会取其文本内容。
-func (s *Server) finishChat(modelName string, observer *streamObserver,
+func (s *Server) finishChat(modelName, deviceID string, observer *streamObserver,
 	started time.Time, streaming bool, status int, failure string, clientBody map[string]any) {
 
 	cost := time.Since(started).Round(time.Millisecond)
@@ -181,6 +196,7 @@ func (s *Server) finishChat(modelName string, observer *streamObserver,
 
 	s.recordChat(journal.Record{
 		Kind:          journal.KindChat,
+		Device:        deviceID,
 		Message:       message,
 		Model:         modelName,
 		Credit:        usage.Credit,

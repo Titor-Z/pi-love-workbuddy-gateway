@@ -14,9 +14,11 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/billing"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/devices"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/gateway"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
-	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/upstream"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/webui"
 )
 
@@ -38,9 +40,24 @@ const noncePlaceholder = "__PLWG_NONCE__"
 
 // Deps 是面板的依赖。
 type Deps struct {
-	Version        string
-	StartedAt      time.Time
-	AuthFile       string
+	Version   string
+	StartedAt time.Time
+
+	// Mode 决定面板显示哪些区块：客户端模式没有凭证，
+	// 余额、账号状态这些部分不能照常渲染成「读取失败」。
+	Mode string
+	// AuthFile / Credential / Billing 只在网关模式下非空。
+	AuthFile string
+
+	// RelayAddr / RelayEnabled / TLSFingerprint / PSKHint / Devices 描述转发服务，
+	// 只有网关模式才有。
+	RelayAddr      string
+	RelayEnabled   bool
+	TLSFingerprint string
+	PSKHint        string
+	Devices        *devices.Registry
+	Device         *identity.Device
+
 	ListenAddr     string
 	ConsoleAddr    string
 	LogPath        string
@@ -48,7 +65,7 @@ type Deps struct {
 	PromotionsPath string
 
 	Credential *credential.Manager
-	Upstream   *upstream.Client
+	Upstream   gateway.Backend
 	Billing    *billing.Client
 	Promotions *catalog.Promotions
 	Journal    *journal.Journal

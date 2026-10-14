@@ -126,6 +126,13 @@ type Record struct {
 
 	// Version 只在启动事件里出现，方便对照「这个问题是哪个版本产生的」。
 	Version string `json:"version,omitempty"`
+
+	// Device 是发起本次请求的设备 ID；本机直连（pi 直接连网关）为空。
+	//
+	// 多设备共用一个账号之后，「哪个请求来自哪台机器」就成了必须能回答的问题，
+	// 而这是回答它的唯一依据。名字不存进来：名字会被用户改，
+	// 存下来的就是过期数据；展示时再按 ID 去设备表里查。
+	Device string `json:"device,omitempty"`
 }
 
 // payloadTTL 是带对话正文的事件保留时长。超过这个时长的拦截/拒答正文会被

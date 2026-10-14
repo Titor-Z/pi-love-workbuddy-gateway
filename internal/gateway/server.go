@@ -15,9 +15,9 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/config"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
-	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/upstream"
 )
 
 // maxErrorBody 是读取后端错误响应体的上限，避免异常响应撑爆内存。
@@ -27,17 +27,28 @@ const maxErrorBody = 64 << 10
 type Server struct {
 	cfg        *config.Config
 	cred       *credential.Manager
-	up         *upstream.Client
+	up         Backend
 	promotions *catalog.Promotions
 	logger     *logging.Logger
 	journal    *journal.Journal // 允许为 nil（测试场景）
+
+	// gate 是并发闸门。它属于 Server 而不是 Backend：
+	// 网关的两个入口（本机 API 与局域网 relay）都挂同一个 Handler，
+	// 所以闸门自动对两条路径都生效，也不可能被其中一条绕过。
+	gate *Gate
 }
 
-// NewServer 构造网关。events 允许为 nil。
-func NewServer(cfg *config.Config, cred *credential.Manager, up *upstream.Client,
-	promotions *catalog.Promotions, logger *logging.Logger, events *journal.Journal) *Server {
+// NewServer 构造网关。cred 与 events 都允许为 nil：
+// 客户端模式的网关不持有凭证，health 接口因此不会有账号摘要。
+//
+// maxConcurrent 是对后端并发的上限，<=0 表示不限。它保护的是**后端**，
+// 因为多条入口（本机直连、局域网客户端）最终都归到同一个 WorkBuddy 账号上，
+// 并发翻倍会让本就存在的 429 提前到来。
+func NewServer(cfg *config.Config, cred *credential.Manager, up Backend,
+	promotions *catalog.Promotions, logger *logging.Logger, events *journal.Journal,
+	maxConcurrent int) *Server {
 	return &Server{cfg: cfg, cred: cred, up: up, promotions: promotions,
-		logger: logger, journal: events}
+		logger: logger, journal: events, gate: NewGate(maxConcurrent)}
 }
 
 // Handler 返回本地网关的 HTTP 处理器。
@@ -50,19 +61,31 @@ func (s *Server) Handler() http.Handler {
 }
 
 // handleHealth 返回进程与账号的摘要信息，不含任何凭据。
+//
+// 客户端模式没有凭证（s.cred 为 nil），这时如实说明自己在转发，
+// 而不是返回一个空壳的账号状态——那样看起来像「凭证坏了」。
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	summary := map[string]any{
-		"status":    "ok",
-		"auth_file": s.cred.Path(),
-	}
-	for key, value := range s.cred.Summary() {
-		summary[key] = value
+	summary := map[string]any{"status": "ok"}
+	if s.cred == nil {
+		summary["auth_file"] = ""
+		summary["mode"] = "relay-only"
+	} else {
+		summary["auth_file"] = s.cred.Path()
+		for key, value := range s.cred.Summary() {
+			summary[key] = value
+		}
 	}
 	writeJSON(w, http.StatusOK, summary)
 }
 
 // authorize 校验本地访问密钥；未配置密钥时直接放行。
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request) bool {
+	// 来自 relay 端口的请求已经过了那一侧的准入（PSK + TLS 指纹 + 设备吊销）。
+	// -api-key 只保护本机 API 端口，两套鉴权彼此独立——
+	// 不跳过的话，配了 -api-key 的用户会看到所有客户端都 401。
+	if identity.FromRelay(r.Context()) {
+		return true
+	}
 	if s.cfg.APIKey == "" {
 		return true
 	}

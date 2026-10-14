@@ -231,6 +231,7 @@ func newGateway(t *testing.T, backend *fakeBackend, apiKey string, expiresAt tim
 		promotions,
 		logger,
 		nil, // 事件文件改为由专门的测试注入
+		0,   // 并发不限：集成测试要能并行跑
 	)
 	return server.Handler(), authFile
 }
@@ -631,6 +632,7 @@ func newGatewayWithJournal(t *testing.T, backend *fakeBackend, apiKey string, ex
 		promotions,
 		logger,
 		events,
+		0, // 并发不限：集成测试要能并行跑
 	)
 	return server.Handler(), journalPath
 }
