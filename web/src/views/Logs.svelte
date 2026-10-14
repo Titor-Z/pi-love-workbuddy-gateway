@@ -219,18 +219,9 @@
       </div>
     {/if}
   {:else}
-    <div class="notice warn">
-      <strong>关于「拦截」与「拒答」</strong>：本工具把判定分成两栏，请分开理解：
-      <ul>
-        <li><strong>确定拦截</strong>：后端亲口承认拦了——流式通道的
-          <code>finish_reason=content_filter</code> / 非空 <code>refusal</code>，或硬阻断通道的
-          策略码（如非 200 的 <code>11128 安全策略拦截</code>）。这部分是准的。</li>
-        <li><strong>疑似拒答</strong>：模型礼貌说「抱歉我不能……」时，后端给的也是
-          <code>finish_reason=stop</code>，和正常回复没有结构区别，协议层<strong>无法</strong>可靠识别。
-          这栏是本工具的<strong>文本启发式猜测</strong>，可能误报也可能漏报，<strong>不计入拦截率</strong>。</li>
-      </ul>
-      <strong>不改动任何字节</strong>——pi 收到的内容与后端发来的完全一致。拦截逻辑集中在
-      <code>internal/blocked</code> 一个模块里，日后发现新的策略码或拒答说法，只改那一处即可。
+    <div class="notice">
+      <strong>点任意一行看详情。</strong>「拦截」与「拒答」是两回事：拦截是后端明确拒了（准），
+      拒答是本工具的文本猜测（可能误报，不计入拦截率）。
     </div>
 
     {#if loading && events.length === 0}
@@ -238,24 +229,30 @@
     {:else if visible.length === 0}
       <div class="empty">没有符合条件的事件。</div>
     {:else}
-      <div class="log">
-        {#each paged as event, index (index)}
-          <!-- svelte-ignore a11y_click_events_have_key_events -->
-          <!-- svelte-ignore a11y_no_static_element_interactions -->
-          <div
-            class="log-row"
-            class:blocked={event.blocked}
-            role="button"
-            tabindex="0"
-            onclick={() => (selected = event)}
-            onkeydown={(e) => e.key === "Enter" && (selected = event)}
-          >
-            <span class="t">{fmt.clock(event.t)}</span>
-            <span class="kind">{fmt.kindLabel(event.kind)}</span>
-            <span>{event.msg || "—"}</span>
-            <span class="peek">详情 ›</span>
-          </div>
-        {/each}
+      <div class="card tight">
+        <table class="timeline">
+          <thead>
+            <tr>
+              <th style="width:96px">时间</th>
+              <th style="width:72px">类型</th>
+              <th>说明</th>
+            </tr>
+          </thead>
+          <tbody>
+            {#each paged as event, index (index)}
+              <tr class="row" class:blocked={event.blocked} onclick={() => (selected = event)}>
+                <td class="num">{fmt.clock(event.t)}</td>
+                <td class="num">{fmt.kindLabel(event.kind)}</td>
+                <td class="wrap">
+                  {event.msg || "—"}
+                  {#if event.blocked}<span class="tag blocked">拦截</span>{/if}
+                  {#if event.refused}<span class="tag promo">拒答</span>{/if}
+                  {#if event.rate_limited}<span class="tag rate">限流</span>{/if}
+                </td>
+              </tr>
+            {/each}
+          </tbody>
+        </table>
       </div>
     {/if}
   {/if}
@@ -286,25 +283,5 @@
     font-size: 10px;
     color: var(--muted);
     margin-left: 4px;
-  }
-
-  /* 明细行可点击：光标提示 + hover 压暗，和按钮 hover 反白是同一种反馈语言。 */
-  .row {
-    cursor: pointer;
-  }
-
-  .row:hover {
-    background: color-mix(in srgb, var(--ink) 6%, transparent);
-  }
-
-  .peek {
-    font-size: 11px;
-    color: var(--muted);
-    opacity: 0;
-    transition: opacity 120ms ease-out;
-  }
-
-  .log-row:hover .peek {
-    opacity: 1;
   }
 </style>

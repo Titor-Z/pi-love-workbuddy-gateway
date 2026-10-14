@@ -890,12 +890,6 @@ textarea {
    外层页面已经是滚动容器，内层再套一个：滚轮到边界会卡住、
    整页的滚动位置会被抢走，触控板上尤其难受。
    长列表一律分页。 */
-.log {
-  font-family: var(--font-mono);
-  font-size: 12px;
-  border: 5px solid var(--rule);
-}
-
 /* 分页器。列表不做内部滚动，长列表一律靠它。 */
 .pager {
   display: flex;
@@ -914,30 +908,41 @@ textarea {
    一页 50 行、每行横跨整屏的三列，没有线就找不到自己读到哪了。
    阈值写死：**超过约 20 行才画行线**，4~10 行的表一律不画，
    靠行高和数字对齐来分。 */
-.log-row {
-  display: grid;
-  grid-template-columns: 150px 62px 1fr;
-  gap: 10px;
-  padding: 6px 10px;
+/* ── 时间线表格 ─────────────────────────────────────────── */
+
+/* 时间线改用表格后，同样受上面那条「稠密列表才画行线」的例外约束：
+   一页 50 行，没有行线就找不到自己读到哪了。行线用最细的那一档。 */
+table.timeline td {
   border-bottom: 1px solid var(--line);
+  vertical-align: top;
 }
 
-.log-row:hover {
+/* 说明列允许换行。这里默认换行而不是挤成一行——错误文案里带着后端原文，
+   一行放不下就横向滚动，是把「信息多」的问题转嫁成了操作上的不便。
+   换行不会破坏表格的纵向对齐，因为时间与类型两列都 nowrap。 */
+table.timeline td.wrap {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.55;
+}
+
+/* 时间线行可点开抽屉。反馈与按钮 hover 同一套语言：底色压暗。 */
+table.timeline tbody tr.row {
+  cursor: pointer;
+}
+
+table.timeline tbody tr.row:hover {
   background: var(--hover);
 }
 
-.log-row .t {
-  color: var(--muted);
-}
-
-.log-row.blocked {
+/* 被拦截的行左侧留一道红边，让「异常行」在扫视时一眼可辨。 */
+table.timeline tbody tr.blocked td:first-child {
   border-left: 8px solid var(--error);
+  padding-left: 2px;
 }
 
-.log-row .kind {
-  font-weight: 700;
-  text-transform: uppercase;
-  font-size: 10px;
+table.timeline .tag {
+  margin-left: 6px;
 }
 
 @media (max-width: 720px) {
@@ -950,22 +955,9 @@ textarea {
     width: 100%;
     padding: 8px 16px;
   }
-  /* 分页器。列表不做内部滚动，长列表一律靠它。 */
-.pager {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-top: 16px;
-}
-
-.pager-info {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.log-row {
-    grid-template-columns: 1fr;
-    gap: 2px;
+  /* 时间线表格在窄屏下不隐藏任何列——隐藏列就是丢信息。
+     说明列已经允许换行，靠它自己适应宽度。 */
+  table.timeline {
+    font-size: 12px;
   }
 }
