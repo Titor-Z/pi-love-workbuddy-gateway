@@ -221,23 +221,18 @@ func (l *liveBackend) Models(context.Context) ([]upstream.ModelInfo, error) {
 	return []upstream.ModelInfo{{ID: "glm-5.3"}}, nil
 }
 
-// TestRelayRequestsBypassAPIKey 两个端口的鉴权彼此独立：
-// 配了 -api-key 也不该要求来自转发端口的请求带上它，
-// 否则开了密钥的用户会看到所有客户端都 401。
+// TestRelayRequestsReachGateway 转发链路必须真的通到网关。
+//
+// 顺带守住一件事：relay 来的请求不能因为任何「本机准入」被挡下。
+// 两套鉴权彼此独立——API 端口听 127.0.0.1、由面板随机数挡跨站；
+// relay 端口对局域网开放、由 PSK + 指纹 + 设备吊销把关。
 func TestRelayRequestsBypassAPIKey(t *testing.T) {
 	logger, err := logging.New("", false)
 	if err != nil {
 		t.Fatalf("构造日志器失败：%v", err)
 	}
-	// 故意在网关侧配置一个本地密钥；转发请求不带它。
-	server := gateway.NewServer(&config.Config{APIKey: "local-secret"}, nil,
+	server := gateway.NewServer(&config.Config{}, nil,
 		&liveBackend{baseURL: "http://127.0.0.1:1"}, nil, logger, nil, 0)
-
-	direct := httptest.NewServer(server.Handler())
-	defer direct.Close()
-	if code := postRelayChat(t, direct.URL+"/v1/chat/completions"); code != http.StatusUnauthorized {
-		t.Errorf("本机直连不带密钥：状态码 = %d，期望 401", code)
-	}
 
 	// 走上真实的转发链路，由 relay 打上来源标记。
 	dir := t.TempDir()

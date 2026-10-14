@@ -15,7 +15,6 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/config"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
-	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
 )
@@ -78,22 +77,16 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, summary)
 }
 
-// authorize 校验本地访问密钥；未配置密钥时直接放行。
+// authorize 是 API 端口的准入。
+//
+// 不设密钥。它只听 127.0.0.1；而「能访问本机 API 的程序」本来就
+// 能直接读配置目录里的登录态，再加一道密钥挡不住任何东西，
+// 只会让每次重启都要改 pi 的配置。
+//
+// relay 端口是另一回事：它必须对局域网开放，所以有自己的一套
+// 真准入（PSK + TLS 指纹 + 设备吊销），在 relay 包里。
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request) bool {
-	// 来自 relay 端口的请求已经过了那一侧的准入（PSK + TLS 指纹 + 设备吊销）。
-	// -api-key 只保护本机 API 端口，两套鉴权彼此独立——
-	// 不跳过的话，配了 -api-key 的用户会看到所有客户端都 401。
-	if identity.FromRelay(r.Context()) {
-		return true
-	}
-	if s.cfg.APIKey == "" {
-		return true
-	}
-	if bearerToken(r) == s.cfg.APIKey || r.Header.Get("X-Api-Key") == s.cfg.APIKey {
-		return true
-	}
-	writeError(w, http.StatusUnauthorized, "invalid_request_error", "本地访问密钥不正确")
-	return false
+	return true
 }
 
 // bearerToken 从 Authorization 头里取出 Bearer 令牌。

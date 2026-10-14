@@ -52,6 +52,10 @@ type Deps struct {
 
 	// Syncer 是客户端模式的凭证同步器；网关模式为 nil。
 	Syncer *credentialsync.Syncer
+	// PairingErr 非空表示客户端模式尚未配对。面板据此显示配对表单。
+	PairingErr error
+	// PairingAddress 是本次要连的网关地址，预填进表单。
+	PairingAddress string
 
 	// RelayAddr / RelayEnabled / TLSFingerprint / PSKHint / Devices 描述转发服务，
 	// 只有网关模式才有。
@@ -145,6 +149,11 @@ func (p *Panel) Handler() http.Handler {
 	mux.HandleFunc("POST /api/sync", p.guarded(p.handleSetSync))
 	mux.HandleFunc("POST /api/sync/now", p.guarded(p.handleSyncNow))
 	mux.HandleFunc("GET /api/sync/switch-check", p.guarded(p.handleSwitchCheck))
+	mux.HandleFunc("POST /api/sync/switch", p.guarded(p.handleSwitchExecute))
+
+	// 配对：客户端模式的入口。未配对时只有这些接口可用。
+	mux.HandleFunc("POST /api/pairing/probe", p.guarded(p.handlePairingProbe))
+	mux.HandleFunc("POST /api/pairing/confirm", p.guarded(p.handlePairingConfirm))
 
 	mux.HandleFunc("POST /api/control/stop", p.guarded(p.handleStop))
 	mux.HandleFunc("POST /api/control/restart", p.guarded(p.handleRestart))

@@ -29,6 +29,11 @@ type modelBilling struct {
 
 // handleModels 返回后端的实时模型目录，并带上费用标记。
 func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
+	if s.up == nil {
+		writeError(w, http.StatusServiceUnavailable, "not_paired",
+			"本机尚未与网关配对。请打开控制台「多设备」页填入网关密钥并确认证书指纹。")
+		return
+	}
 	if !s.authorize(w, r) {
 		return
 	}

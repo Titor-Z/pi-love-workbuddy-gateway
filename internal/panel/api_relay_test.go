@@ -2,6 +2,7 @@ package panel
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/devices"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/pairing"
 )
 
 // newRelayPanel 造一个处于网关模式、带设备表的面板。
@@ -390,5 +392,142 @@ func TestSwitchCheckReportsReason(t *testing.T) {
 	}
 	if payload["reason"] != "凭证已过期，请先连回网关同步新的" {
 		t.Errorf("原因没有传到前端：%v", payload["reason"])
+	}
+}
+
+// TestPairingProbeRejectsBadInput 表单填错要给具体原因，
+// 而不是一个「失败」让用户回去猜。
+func TestPairingProbeRejectsBadInput(t *testing.T) {
+	console, _, _ := newRelayPanel(t)
+	console.deps.Mode = config.ModeClient
+	SetProbeFingerprint(func(string) (string, error) { return "aa:bb", nil })
+	defer SetProbeFingerprint(nil)
+
+	cases := []struct {
+		name    string
+		body    map[string]any
+		wantSub string
+	}{
+		{"带路径的地址", map[string]any{"address": "h:8790/x", "psk": "k"}, "主机:端口"},
+		{"缺密钥", map[string]any{"address": "h:8790"}, "密钥"},
+		{"地址为空", map[string]any{"address": "", "psk": "k"}, "主机:端口"},
+	}
+	for _, testCase := range cases {
+		recorder := call(t, console, http.MethodPost, "/api/pairing/probe", testCase.body, nil)
+		if !strings.Contains(recorder.Body.String(), testCase.wantSub) {
+			t.Errorf("%s：响应没有说明原因：%s", testCase.name, recorder.Body.String())
+		}
+	}
+}
+
+// TestPairingProbeReturnsFingerprintForConfirmation 第一步只取指纹、不建信任。
+// 返回的指纹要交给用户比对，所以必须真的回给前端。
+func TestPairingProbeReturnsFingerprintForConfirmation(t *testing.T) {
+	console, _, _ := newRelayPanel(t)
+	console.deps.Mode = config.ModeClient
+	SetProbeFingerprint(func(address string) (string, error) { return "11:22:33", nil })
+	defer SetProbeFingerprint(nil)
+
+	recorder := call(t, console, http.MethodPost, "/api/pairing/probe",
+		map[string]any{"address": "192.168.1.5:8790", "psk": "secret"}, nil)
+	var payload pairingResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("响应不是 JSON：%v", err)
+	}
+	if !payload.NeedsConfirm {
+		t.Error("应当进入「等待确认」这一步")
+	}
+	if payload.Fingerprint != "11:22:33" {
+		t.Errorf("指纹 = %q", payload.Fingerprint)
+	}
+	// 此时还不能算配对完成：用户还没比对过。
+	if payload.Paired {
+		t.Error("未确认指纹就报告配对完成——那等于自动信任")
+	}
+}
+
+// TestPairingConfirmRequiresFingerprint 没有指纹不给确认。
+// 少了它等于「连一次就信」，中间人换张证书照样通过。
+func TestPairingConfirmRequiresFingerprint(t *testing.T) {
+	console, _, _ := newRelayPanel(t)
+	console.deps.Mode = config.ModeClient
+	recorder := call(t, console, http.MethodPost, "/api/pairing/confirm",
+		map[string]any{"address": "h:8790", "psk": "k"}, nil)
+	if recorder.Code != http.StatusBadRequest {
+		t.Errorf("状态码 = %d，期望 400", recorder.Code)
+	}
+}
+
+// TestPairingConfirmWritesPrivateFile 确认后落盘，权限 0600。
+func TestPairingConfirmWritesPrivateFile(t *testing.T) {
+	console, _, _ := newRelayPanel(t)
+	console.deps.Mode = config.ModeClient
+	recorder := call(t, console, http.MethodPost, "/api/pairing/confirm",
+		map[string]any{"address": "192.168.1.5:8790", "psk": "k", "fingerprint": "AB:CD"}, nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d，期望 200：%s", recorder.Code, recorder.Body.String())
+	}
+	info, exists, err := pairing.Load(appdir.ClientPath())
+	if err != nil || !exists {
+		t.Fatalf("配对信息没落盘：%v", err)
+	}
+	if info.Fingerprint != "abcd" {
+		t.Errorf("指纹没有被规整：%q", info.Fingerprint)
+	}
+	if info.URL != "https://192.168.1.5:8790" {
+		t.Errorf("地址没有被补全：%q", info.URL)
+	}
+	info2, err := os.Stat(appdir.ClientPath())
+	if err != nil {
+		t.Fatalf("stat 失败：%v", err)
+	}
+	if perm := info2.Mode().Perm(); perm != 0o600 {
+		t.Errorf("权限 = %o，期望 600", perm)
+	}
+}
+
+// TestPairingEndpointsRejectedInGatewayMode 网关模式不需要配对，
+// 这些接口必须明确拒绝，而不是写出一份毫无意义的配对文件。
+func TestPairingEndpointsRejectedInGatewayMode(t *testing.T) {
+	console, _, _ := newRelayPanel(t) // 网关模式
+	for _, path := range []string{"/api/pairing/probe", "/api/pairing/confirm"} {
+		recorder := call(t, console, http.MethodPost, path, map[string]any{}, nil)
+		if recorder.Code != http.StatusNotImplemented {
+			t.Errorf("%s 状态码 = %d，期望 501", path, recorder.Code)
+		}
+	}
+}
+
+// TestSwitchExecuteReportsReason 切换失败要把原因原样带给用户，
+// 而不是一个 500。四种被拒原因各自的处置方式不同。
+func TestSwitchExecuteReportsReason(t *testing.T) {
+	console, _, _ := newRelayPanel(t)
+	console.deps.Mode = config.ModeClient
+	SetSwitchExecutor(func() error { return errors.New("凭证已过期，请先连回网关同步新的") })
+	defer SetSwitchExecutor(nil)
+
+	recorder := call(t, console, http.MethodPost, "/api/sync/switch", nil, nil)
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("状态码 = %d，期望 409", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "凭证已过期") {
+		t.Errorf("原因没有传到前端：%s", recorder.Body.String())
+	}
+}
+
+// TestSwitchExecuteSuccessTellsUserToRestart 切换完成后必须明说「要重启」。
+// 模式由启动参数决定，不重启是切不过去的。
+func TestSwitchExecuteSuccessTellsUserToRestart(t *testing.T) {
+	console, _, _ := newRelayPanel(t)
+	console.deps.Mode = config.ModeClient
+	SetSwitchExecutor(func() error { return nil })
+	defer SetSwitchExecutor(nil)
+
+	recorder := call(t, console, http.MethodPost, "/api/sync/switch", nil, nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d，期望 200", recorder.Code)
+	}
+	if !strings.Contains(recorder.Body.String(), "重新启动") {
+		t.Errorf("没有提示要重启：%s", recorder.Body.String())
 	}
 }

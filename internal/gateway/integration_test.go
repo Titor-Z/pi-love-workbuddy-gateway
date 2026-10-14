@@ -225,7 +225,7 @@ func newGateway(t *testing.T, backend *fakeBackend, apiKey string, expiresAt tim
 	// 后端地址与登录态路径都指到测试环境，不碰任何真实资源。
 	cred := credential.NewManager(authFile, cipher, nil, backend.URL())
 	server := gateway.NewServer(
-		&config.Config{ListenAddr: "127.0.0.1:8788", APIKey: apiKey},
+		&config.Config{ListenAddr: "127.0.0.1:8788"},
 		cred,
 		upstream.NewClient(cred, backend.URL()),
 		promotions,
@@ -382,25 +382,6 @@ func TestChatRejectsBadInputBeforeCallingBackend(t *testing.T) {
 		if backend.chatCount() != 0 {
 			t.Errorf("%s：不该把请求转发给后端", name)
 		}
-	}
-}
-
-// TestChatRequiresAPIKey 配了本地密钥就必须校验。
-func TestChatRequiresAPIKey(t *testing.T) {
-	backend := newFakeBackend(t)
-	handler, _ := newGateway(t, backend, "local-secret", later())
-	body := `{"model":"glm-5.3","messages":[{"role":"user","content":"hi"}]}`
-
-	if recorder := postChat(t, handler, body); recorder.Code != http.StatusUnauthorized {
-		t.Errorf("不带密钥：状态码 = %d，期望 401", recorder.Code)
-	}
-
-	request := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
-	request.Header.Set("Authorization", "Bearer local-secret")
-	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, request)
-	if recorder.Code != http.StatusOK {
-		t.Errorf("带对密钥：状态码 = %d，期望 200", recorder.Code)
 	}
 }
 
@@ -626,7 +607,7 @@ func newGatewayWithJournal(t *testing.T, backend *fakeBackend, apiKey string, ex
 
 	cred := credential.NewManager(authFile, cipher, nil, backend.URL())
 	server := gateway.NewServer(
-		&config.Config{ListenAddr: "127.0.0.1:8788", APIKey: apiKey},
+		&config.Config{ListenAddr: "127.0.0.1:8788"},
 		cred,
 		upstream.NewClient(cred, backend.URL()),
 		promotions,

@@ -2,9 +2,11 @@ package panel
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/appdir"
@@ -12,6 +14,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/devices"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/pairing"
 )
 
 // relayPreference 是「是否开放转发服务」这一项偏好。
@@ -307,6 +310,39 @@ func (p *Panel) handleSyncNow(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// SwitchExecutor 由 main 注入：真的执行切换（写本地登录态、标记副本活跃）。
+type SwitchExecutor func() error
+
+// switchExecutor 是注入的执行器；未注入时切换一律拒绝。
+var switchExecutor SwitchExecutor
+
+// SetSwitchExecutor 注入切换执行器。
+func SetSwitchExecutor(executor SwitchExecutor) { switchExecutor = executor }
+
+// handleSwitchExecute 客户端模式：用已同步的凭证切到网关模式。
+//
+// 做完之后要重启才生效（模式由启动参数决定）。所以这里返回一句
+// 明确的「重启后生效」，而不是假装已经切好了。
+func (p *Panel) handleSwitchExecute(w http.ResponseWriter, _ *http.Request) {
+	if !p.requireClientMode() {
+		writeError(w, http.StatusNotImplemented, "not_configured", "只有客户端模式需要切换")
+		return
+	}
+	if switchExecutor == nil {
+		writeError(w, http.StatusNotImplemented, "not_configured", "本模式不支持切换")
+		return
+	}
+	if err := switchExecutor(); err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	p.deps.Logger.Printf("已用同步来的凭证切换到网关模式，重启后生效")
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"message": "已写好本机凭证。请停掉本进程，然后不带 -mode client 重新启动。",
+	})
+}
+
 // SwitchChecker 由 main 注入：检查本机能否切到网关模式。
 //
 // 面板自己不做这个判断——那要读凭证副本并解密，而解密密钥在 runtime 那一层。
@@ -336,3 +372,122 @@ func (p *Panel) handleSwitchCheck(w http.ResponseWriter, _ *http.Request) {
 		"synced_at":  syncedAt,
 	})
 }
+
+// pairingRequest 是配对表单提交的内容。
+type pairingRequest struct {
+	// Address 是网关地址，形如 192.168.1.5:8790（协议可省略）。
+	Address string `json:"address"`
+	// PSK 是网关控制台显示的那串密钥。
+	PSK string `json:"psk"`
+}
+
+// pairingResponse 告诉前端下一步该做什么。
+//
+// 分两步是因为信任必须由人建立：先看清钥匙长什么样，
+// 再决定要不要认。自动信任会让中间人也通过。
+type pairingResponse struct {
+	// NeedsConfirm 为真表示已连上网关并取到指纹，等待用户确认。
+	NeedsConfirm bool   `json:"needs_confirm"`
+	Fingerprint  string `json:"fingerprint,omitempty"`
+	Address      string `json:"address,omitempty"`
+	// Paired 为真表示配对已完成。
+	Paired bool `json:"paired"`
+	// Error 是失败原因，直接显示给用户。
+	Error string `json:"error,omitempty"`
+}
+
+// handlePairingProbe 第一步：连上网关取指纹。
+//
+// 这一步**刻意不校验、不建立信任**——它的语义是「让用户看看这把钥匙」。
+// 所以即使地址填错、密钥填错，也要把能拿到的信息拿回来，
+// 让用户在表单里看到具体哪一步不对。
+func (p *Panel) handlePairingProbe(w http.ResponseWriter, r *http.Request) {
+	if !p.requireClientMode() {
+		writeError(w, http.StatusNotImplemented, "not_configured", "只有客户端模式需要配对")
+		return
+	}
+	var request pairingRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "请求体不是合法 JSON")
+		return
+	}
+	address := pairing.NormalizeAddress(request.Address)
+	if address == "" || strings.ContainsAny(request.Address, "/?") {
+		writeJSON(w, http.StatusOK, pairingResponse{
+			Error: "网关地址只能是「主机:端口」，形如 192.168.1.5:8790",
+		})
+		return
+	}
+	if strings.TrimSpace(request.PSK) == "" {
+		writeJSON(w, http.StatusOK, pairingResponse{Error: "请填入网关控制台显示的密钥"})
+		return
+	}
+
+	// 先落一份「未确认指纹」的配对，让后续连接能带着密钥过去验。
+	// 指纹留空：此时还不该信任任何证书。
+	provisional := pairing.Info{URL: address, PSK: strings.TrimSpace(request.PSK)}
+	fingerprint, err := probeFingerprint(address)
+	if err != nil {
+		writeJSON(w, http.StatusOK, pairingResponse{Error: err.Error()})
+		return
+	}
+	provisional.Fingerprint = ""
+	if err := p.savePairing(provisional); err != nil {
+		p.fail(w, "保存配对信息", err)
+		return
+	}
+	writeJSON(w, http.StatusOK, pairingResponse{
+		NeedsConfirm: true,
+		Fingerprint:  fingerprint,
+		Address:      address,
+	})
+}
+
+// handlePairingConfirm 第二步：用户比对过指纹，确认信任。
+func (p *Panel) handlePairingConfirm(w http.ResponseWriter, r *http.Request) {
+	if !p.requireClientMode() {
+		writeError(w, http.StatusNotImplemented, "not_configured", "只有客户端模式需要配对")
+		return
+	}
+	var request struct {
+		Address     string `json:"address"`
+		PSK         string `json:"psk"`
+		Fingerprint string `json:"fingerprint"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		writeError(w, http.StatusBadRequest, "bad_request", "请求体不是合法 JSON")
+		return
+	}
+	if strings.TrimSpace(request.Fingerprint) == "" {
+		writeError(w, http.StatusBadRequest, "bad_request", "缺少要确认的指纹")
+		return
+	}
+	info := pairing.Info{
+		URL:         pairing.NormalizeAddress(request.Address),
+		PSK:         strings.TrimSpace(request.PSK),
+		Fingerprint: pairing.NormalizeFingerprint(request.Fingerprint),
+	}
+	if err := p.savePairing(info); err != nil {
+		p.fail(w, "保存配对信息", err)
+		return
+	}
+	p.deps.Logger.Printf("已与网关配对：%s", info.URL)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "paired": true})
+}
+
+// savePairing 写配对文件。权限由 pairing 包统一保证 0600。
+func (p *Panel) savePairing(info pairing.Info) error {
+	return pairing.Save(appdir.ClientPath(), info)
+}
+
+// requireClientMode 是客户端模式专属接口的前置。
+func (p *Panel) requireClientMode() bool { return p.deps.Mode == config.ModeClient }
+
+// probeFingerprint 由 main 注入：它要建 TLS 连接，
+// 而建连接的细节在 relaytls 那一层，面板不该知道。
+var probeFingerprint = func(address string) (string, error) {
+	return "", fmt.Errorf("当前模式不支持探测指纹")
+}
+
+// SetProbeFingerprint 注入指纹探测实现。
+func SetProbeFingerprint(probe func(string) (string, error)) { probeFingerprint = probe }

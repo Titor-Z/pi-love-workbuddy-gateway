@@ -33,6 +33,13 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	if !s.authorize(w, r) {
 		return
 	}
+	// 未配对的客户端没有转发通道。这时候要明说「去控制台配对」，
+	// 而不是甩一个 nil 指针崩溃或者「后端请求失败」——后者会被当成网络问题排查。
+	if s.up == nil {
+		writeError(w, http.StatusServiceUnavailable, "not_paired",
+			"本机尚未与网关配对。请打开控制台「多设备」页填入网关密钥并确认证书指纹。")
+		return
+	}
 	clientBody, err := decodeJSONBody(r)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request_error", err.Error())

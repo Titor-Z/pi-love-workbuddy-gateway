@@ -8,6 +8,12 @@
   let sync = $state(null);
   let switchCheck = $state(null);
   let switching = $state(false);
+  // 配对表单：客户端首次连网关时用。
+  let pairAddress = $state("");
+  let pairKey = $state("");
+  let pairStep = $state("form"); // form → confirm
+  let pairFingerprint = $state("");
+  let pairBusy = $state(false);
   let error = $state("");
   let notice = $state("");
   let loading = $state(true);
@@ -19,10 +25,11 @@
     loading = true;
     error = "";
     try {
-      const [relayPayload, statusPayload, syncPayload] = await Promise.all([
-        api.relay(),
-        api.status(),
-        // 客户端模式才有意义；网关模式下这个端点返回 501，忽略即可。
+      const statusPayload = await api.status();
+      // 未配对时 relay / sync 会返回 501，忽略即可——
+      // 此时页面显示的是配对表单，不是这些状态。
+      const [relayPayload, syncPayload] = await Promise.all([
+        api.relay().catch(() => null),
         api.sync().catch(() => null),
       ]);
       relay = relayPayload;
@@ -39,6 +46,7 @@
   });
 
   const isGateway = $derived(status?.mode === "gateway");
+  const paired = $derived(status?.paired !== false);
   const deviceCount = $derived(relay?.devices?.length ?? 0);
 
   // 停用只挡一个自报的 ID——客户端换一个 ID 就能绕回来。
@@ -53,6 +61,39 @@
 
   function askToggle() {
     pending = { kind: relay?.enabled ? "disable" : "enable" };
+  }
+
+  // 第一步：连上网关取指纹。这一步不建立信任，只把钥匙拿给用户看。
+  async function probePairing() {
+    pairBusy = true;
+    error = "";
+    try {
+      const payload = await api.pairingProbe(pairAddress, pairKey);
+      if (payload.error) {
+        error = payload.error;
+      } else {
+        pairFingerprint = payload.fingerprint;
+        pairAddress = payload.address;
+        pairStep = "confirm";
+      }
+    } catch (cause) {
+      error = cause instanceof ApiError ? cause.message : String(cause);
+    }
+    pairBusy = false;
+  }
+
+  // 第二步：用户比对过指纹，确认信任。
+  async function confirmPairing() {
+    pairBusy = true;
+    error = "";
+    try {
+      await api.pairingConfirm(pairAddress, pairKey, pairFingerprint);
+      notice = "配对完成，正在重启以生效…";
+      await api.restart();
+    } catch (cause) {
+      error = cause instanceof ApiError ? cause.message : String(cause);
+    }
+    pairBusy = false;
   }
 
   async function syncNow() {
@@ -74,6 +115,20 @@
     error = "";
     try {
       switchCheck = await api.switchCheck();
+    } catch (cause) {
+      error = cause instanceof ApiError ? cause.message : String(cause);
+    }
+    switching = false;
+  }
+
+  async function doSwitch() {
+    switching = true;
+    error = "";
+    notice = "";
+    try {
+      const payload = await api.switchToGateway();
+      notice = payload.message || "已写好本机凭证。";
+      pairStep = "form";
     } catch (cause) {
       error = cause instanceof ApiError ? cause.message : String(cause);
     }
@@ -162,6 +217,64 @@
         </tbody>
       </table>
     </div>
+  {:else if !paired}
+    <!-- 客户端首次使用：先配对。密钥与指纹都在这里填、在这里比对，
+         不进命令行（会留在 shell history 与 ps 输出里）。 -->
+    <div class="notice">
+      本机还没和网关配对。填入网关控制台「多设备」页显示的<strong>网关密钥</strong>，
+      并比对证书指纹——比对过之后连接才成立。
+    </div>
+    {#if pairStep === "form"}
+      <div class="card tight">
+        <table>
+          <tbody>
+            <tr>
+              <th style="width:200px">网关地址</th>
+              <td>
+                <input
+                  type="text"
+                  placeholder="192.168.1.5:8790"
+                  bind:value={pairAddress}
+                  style="width:100%"
+                />
+              </td>
+            </tr>
+            <tr>
+              <th>网关密钥</th>
+              <td>
+                <input
+                  type="text"
+                  placeholder="网关控制台显示的那串"
+                  bind:value={pairKey}
+                  style="width:100%"
+                />
+              </td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="actions" style="margin-top:12px">
+          <button class="action primary" onclick={probePairing} disabled={pairBusy}>
+            {pairBusy ? "连接中…" : "连接"}
+          </button>
+        </div>
+      </div>
+    {:else}
+      <div class="card tight">
+        <p>请到网关控制台的「多设备」页，核对下面这串指纹是否<strong>逐位一致</strong>：</p>
+        <p><code class="copyable">{pairFingerprint}</code></p>
+        <p class="dim">
+          不一致就<strong>不要</strong>确认——那说明你连上的不是你的网关。
+        </p>
+        <div class="actions" style="margin-top:12px">
+          <button class="action primary" onclick={confirmPairing} disabled={pairBusy}>
+            {pairBusy ? "保存中…" : "指纹一致，确认"}
+          </button>
+          <button class="action" onclick={() => (pairStep = "form")} disabled={pairBusy}>
+            返回
+          </button>
+        </div>
+      </div>
+    {/if}
   {:else if !relay}
     <div class="notice">正在读取转发服务状态…</div>
   {:else if sync}
@@ -198,10 +311,13 @@
       {#if switchCheck}
         {#if switchCheck.can_switch}
           <div class="notice" style="margin-top:12px">
-            可以切换。在客户端进程的终端里执行
-            <code class="copyable">-switch-to-gateway</code>，
-            它会用本机这份凭证写一份本地登录态，然后以
-            <code class="copyable">-mode gateway</code> 启动。
+            可以切换。点下面的按钮会用本机这份凭证写一份本地登录态，
+            之后停掉本进程、<strong>不带 <code>-mode client</code> 重新启动</strong>即可。
+          </div>
+          <div class="actions" style="margin-top:12px">
+            <button class="action primary" onclick={doSwitch} disabled={switching}>
+              {switching ? "处理中…" : "切换到网关模式"}
+            </button>
           </div>
         {:else}
           <div class="notice warn" style="margin-top:12px">

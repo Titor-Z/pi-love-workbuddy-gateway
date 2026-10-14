@@ -14,17 +14,21 @@ import (
 
 // statusResponse 是概览页顶部的状态数据。
 type statusResponse struct {
-	Version        string         `json:"version"`
-	StartedAt      time.Time      `json:"started_at"`
-	UptimeSeconds  int64          `json:"uptime_seconds"`
-	PID            int            `json:"pid"`
-	ListenAddr     string         `json:"listen_addr"`
-	ConsoleAddr    string         `json:"console_addr"`
-	AuthFile       string         `json:"auth_file"`
-	LogPath        string         `json:"log_path"`
-	JournalPath    string         `json:"journal_path"`
-	PromotionsPath string         `json:"promotions_path"`
-	Mode           string         `json:"mode"`
+	Version        string    `json:"version"`
+	StartedAt      time.Time `json:"started_at"`
+	UptimeSeconds  int64     `json:"uptime_seconds"`
+	PID            int       `json:"pid"`
+	ListenAddr     string    `json:"listen_addr"`
+	ConsoleAddr    string    `json:"console_addr"`
+	AuthFile       string    `json:"auth_file"`
+	LogPath        string    `json:"log_path"`
+	JournalPath    string    `json:"journal_path"`
+	PromotionsPath string    `json:"promotions_path"`
+	Mode           string    `json:"mode"`
+	// Paired 为假时前端应显示配对表单而不是「连不上网关」。
+	Paired         bool           `json:"paired"`
+	PairingAddress string         `json:"pairing_address,omitempty"`
+	PairingError   string         `json:"pairing_error,omitempty"`
 	Account        map[string]any `json:"account"`
 }
 
@@ -38,7 +42,15 @@ func (p *Panel) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		account = p.deps.Credential.Summary()
 		delete(account, "error") // 账号读不出来时不要在面板上暴露内部错误文本
 	}
+	paired := p.deps.PairingErr == nil
+	pairingError := ""
+	if p.deps.PairingErr != nil {
+		pairingError = p.deps.PairingErr.Error()
+	}
 	writeJSON(w, http.StatusOK, statusResponse{
+		Paired:         paired,
+		PairingAddress: p.deps.PairingAddress,
+		PairingError:   pairingError,
 		Version:        p.deps.Version,
 		StartedAt:      p.deps.StartedAt,
 		UptimeSeconds:  int64(time.Since(p.deps.StartedAt).Seconds()),

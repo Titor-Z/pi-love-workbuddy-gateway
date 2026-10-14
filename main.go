@@ -13,18 +13,14 @@ import (
 	"time"
 
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/appdir"
-	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/atrest"
-	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/billing"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/config"
-	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/daemon"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/gateway"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/panel"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relaytls"
-	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/upstream"
 )
 
 // shutdownTimeout 是收到中断信号后等待在途请求结束的时间。
@@ -57,44 +53,9 @@ func run(args []string) error {
 		fmt.Printf("pi-love-workbuddy-gateway %s\n", version)
 		return nil
 	}
-	if len(args) > 0 && args[0] == commandModels {
-		cfg, err := config.Parse(args[1:], os.Stderr)
-		if err != nil {
-			return err
-		}
-		return runModels(cfg)
-	}
-	if len(args) > 0 && args[0] == commandBilling {
-		cfg, err := config.Parse(args[1:], os.Stderr)
-		if err != nil {
-			return err
-		}
-		return runBilling(cfg)
-	}
-	if len(args) > 0 && args[0] == commandServe {
-		// serve 的意图是「就在这个终端里跑起来」，所以它强制前台。
-		args = args[1:]
-		cfg, err := config.Parse(args, os.Stderr)
-		if err != nil {
-			return err
-		}
-		cfg.Daemon = false
-		return runServe(cfg, args)
-	}
 	cfg, err := config.Parse(args, os.Stderr)
 	if err != nil {
 		return err
-	}
-	// 配对要早于派生：它是一次性动作，结果要在前台打印给用户看，
-	// 派生之后就没人能读到那行输出了。
-	// 切到网关模式与「只同步一次」要在前台做完：它们要么写一份本地登录态，
-	// 要么把结果打印给用户看。派生到后台之后这些输出就没人读得到了。
-	// 排在配对之前：-trust 常与 -sync-now 一起用来「认一次 + 同步」。
-	if cfg.SwitchToGateway || cfg.SyncOnly {
-		return runSwitchToGateway(cfg)
-	}
-	if cfg.Mode == config.ModeClient && (cfg.Probe || cfg.Trust != "") {
-		return runPairing(cfg)
 	}
 	// 后台模式：派生一个脱离终端的子进程，父进程随即退出。
 	// 子进程带着 daemon.IsChild() 为真，因此不会再次派生。
@@ -106,14 +67,13 @@ func run(args []string) error {
 
 // runInBackground 派生后台进程并把 PID 报给用户，方便随时停掉。
 func runInBackground(cfg *config.Config, args []string) error {
-	pid, err := daemon.Start(args, cfg.LogPath)
+	pid, err := daemon.Start(args, appdir.LogPath())
 	if err != nil {
 		return err
 	}
 	fmt.Printf("已转入后台，PID %d\n", pid)
-	if cfg.LogPath != "" {
-		fmt.Printf("日志：%s\n", cfg.LogPath)
-	}
+	fmt.Printf("日志：%s\n", appdir.LogPath())
+	fmt.Printf("控制台：http://%s/\n", cfg.ConsoleAddr)
 	fmt.Printf("停止：kill %d\n", pid)
 	return nil
 }
@@ -121,13 +81,13 @@ func runInBackground(cfg *config.Config, args []string) error {
 // runServe 装配各模块并启动 HTTP 服务，直到收到中断信号。
 func runServe(cfg *config.Config, args []string) error {
 	// 后台运行时子进程的标准输出已指向日志文件，再写一遍会让每行重复。
-	logger, err := logging.New(cfg.LogPath, !daemon.IsChild())
+	logger, err := logging.New(appdir.LogPath(), !daemon.IsChild())
 	if err != nil {
 		return err
 	}
 	defer logger.Close()
 
-	promotions, err := catalog.LoadPromotions(resolvePromotionsPath(cfg))
+	promotions, err := catalog.LoadPromotions(appdir.PromotionsPath())
 	if err != nil {
 		return err
 	}
@@ -148,7 +108,10 @@ func runServe(cfg *config.Config, args []string) error {
 	// 并发闸门只对持有凭证的那一侧有意义：
 	// 客户端模式的请求在网关那里已经排过队，这里再限一次
 	// 只会让人以为网关坏了。
-	maxConcurrent := cfg.MaxConcurrent
+	// 并发闸门只对持有凭证的那一侧有意义：
+	// 客户端模式的请求在网关那里已经排过队，这里再限一次
+	// 只会让人以为网关坏了。
+	maxConcurrent := config.MaxConcurrent
 	if cfg.Mode == config.ModeClient {
 		maxConcurrent = 0
 	}
@@ -158,19 +121,21 @@ func runServe(cfg *config.Config, args []string) error {
 		Version:        version,
 		StartedAt:      startedAt,
 		Mode:           cfg.Mode,
-		RelayAddr:      cfg.RelayAddr,
+		RelayAddr:      config.RelayAddr(),
 		RelayEnabled:   parts.relay != nil,
 		TLSFingerprint: parts.fingerprint,
 		PSKHint:        parts.pskHint(),
 		Devices:        parts.devices,
 		Device:         parts.device,
 		Syncer:         parts.syncer,
+		PairingErr:     parts.pairingErr,
+		PairingAddress: parts.address,
 		AuthFile:       parts.authFile,
 		ListenAddr:     cfg.ListenAddr,
 		ConsoleAddr:    cfg.ConsoleAddr,
-		LogPath:        cfg.LogPath,
+		LogPath:        appdir.LogPath(),
 		JournalPath:    events.Path(),
-		PromotionsPath: resolvePromotionsPath(cfg),
+		PromotionsPath: appdir.PromotionsPath(),
 		Credential:     parts.credential,
 		Upstream:       parts.backend,
 		Billing:        parts.billing,
@@ -210,7 +175,7 @@ func runServe(cfg *config.Config, args []string) error {
 	if parts.relay != nil {
 		parts.relay.SetBackend(gatewayHandler.Handler())
 		relayServer = &http.Server{
-			Addr:              cfg.RelayAddr,
+			Addr:              config.RelayAddr(),
 			Handler:           parts.relay.Handler(),
 			TLSConfig:         relaytls.ServerConfig(parts.certificate),
 			ReadHeaderTimeout: 10 * time.Second,
@@ -222,7 +187,7 @@ func runServe(cfg *config.Config, args []string) error {
 		logger.Printf("登录态：%s", parts.authFile)
 		logger.Printf("密钥指纹：%s", parts.keyID)
 	}
-	logger.Printf("日志：%s", describeLogPath(cfg.LogPath))
+	logger.Printf("日志：%s", describeLogPath(appdir.LogPath()))
 	logger.Printf("事件：%s", describeLogPath(events.Path()))
 	logger.Printf("API     http://%s  （/v1/* 与 /health）", cfg.ListenAddr)
 	logger.Printf("控制台  http://%s/", cfg.ConsoleAddr)
@@ -231,15 +196,11 @@ func runServe(cfg *config.Config, args []string) error {
 		// 绑到非本机地址等于把这些一起开放出去。允许，但必须明说。
 		logger.Printf("⚠️ 控制台未只绑本机：余额、请求日志与停止/重启按钮已暴露到该地址，请自行加认证")
 	}
-	if cfg.APIKey != "" {
-		logger.Printf("已启用本地访问密钥校验（仅作用于 API 端口，不作用于控制台与转发端口）")
-	}
 	if cfg.Mode == config.ModeClient {
-		logger.Printf("模式：客户端，转发到 %s", cfg.GatewayURL)
-		logger.Printf("提示：客户端模式不持有 WorkBuddy 凭证，因此现在还不能脱离网关独立工作")
+		logger.Printf("模式：客户端，转发到 %s", cfg.GatewayAddress)
 	}
 	if parts.relay != nil {
-		logger.Printf("转发    https://%s  （已开放，需密钥与指纹确认）", cfg.RelayAddr)
+		logger.Printf("转发    https://%s  （已开放，需密钥与指纹确认）", config.RelayAddr())
 		logger.Printf("网关密钥：%s", parts.pskHint())
 	}
 	logger.Printf("提示：本软件为第三方工具，与腾讯 / WorkBuddy 无官方关联，" +
@@ -251,9 +212,17 @@ func runServe(cfg *config.Config, args []string) error {
 	events.Append(journal.Record{Kind: journal.KindStart, Version: version,
 		Message: fmt.Sprintf("启动 %s，监听 %s", version, cfg.ListenAddr)})
 
+	// 配对请求要建 TLS 连接才能取指纹，那件事在 relaytls 里。
+	// 注入而不是让面板直接依赖，是为了让面板不必知道连接细节。
+	panel.SetProbeFingerprint(func(address string) (string, error) {
+		host := strings.TrimPrefix(strings.TrimPrefix(address, "https://"), "http://")
+		return relaytls.ProbeFingerprint(ctx, host)
+	})
+
 	// 客户端模式：后台同步凭证。网关模式没有这一步——凭证本来就在本机。
 	if parts.syncer != nil {
 		go runCredentialSync(ctx, parts.syncer, logger, events)
+		panel.SetSwitchExecutor(SwitchToGateway)
 		panel.SetSwitchChecker(func() (bool, string, int64, time.Time) {
 			problem, file, _, err := CheckSwitchToGateway()
 			if err != nil {
@@ -326,7 +295,7 @@ func restartSelf(cfg *config.Config, args []string, logger *logging.Logger,
 	events *journal.Journal) error {
 
 	logger.Printf("正在重启：派生新进程")
-	if _, err := daemon.Start(args, cfg.LogPath); err != nil {
+	if _, err := daemon.Start(args, appdir.LogPath()); err != nil {
 		// 重启失败要及时报出来——这时服务已经停了，
 		// 用户面对的是一片空白，必须知道该手工拉起来。
 		logger.Printf("✗ 重启失败：%v", err)
@@ -375,61 +344,6 @@ func isLoopbackAddr(addr string) bool {
 	host = strings.Trim(host, "[]")
 	return host == "127.0.0.1" || strings.HasPrefix(host, "127.") ||
 		host == "localhost" || host == "::1"
-}
-
-// runModels 拉取实时模型目录并打印，可选输出成 pi 的 models.json。
-func runModels(cfg *config.Config) error {
-	cred, _, err := buildCredential(cfg, nil)
-	if err != nil {
-		return err
-	}
-	promotions, err := catalog.LoadPromotions(resolvePromotionsPath(cfg))
-	if err != nil {
-		return err
-	}
-	models, err := upstream.NewClient(cred, "").Models(context.Background())
-	if err != nil {
-		return err
-	}
-	entries := catalog.Build(models, promotions)
-	if cfg.PiOutput {
-		return catalog.WritePiConfig(os.Stdout, entries, piGatewayBaseURL(cfg), cfg.APIKey)
-	}
-	return writeTable(os.Stdout, entries)
-}
-
-// runBilling 读取并打印账号的资源包（余额）。
-func runBilling(cfg *config.Config) error {
-	cred, _, err := buildCredential(cfg, nil)
-	if err != nil {
-		return err
-	}
-	snapshot, err := billing.NewClient(cred, "").Fetch(context.Background())
-	if err != nil {
-		return err
-	}
-	return writeBilling(os.Stdout, snapshot)
-}
-
-// buildCredential 定位登录态并派生解密器。report 允许为 nil。
-func buildCredential(cfg *config.Config, report credential.Reporter) (*credential.Manager, *atrest.Cipher, error) {
-	authFile, err := credential.Locate(cfg.AuthFile)
-	if err != nil {
-		return nil, nil, err
-	}
-	cipher, err := atrest.Shared(cfg.AtRestSecret)
-	if err != nil {
-		return nil, nil, err
-	}
-	return credential.NewManager(authFile, cipher, report, ""), cipher, nil
-}
-
-// resolvePromotionsPath 给出促销配置文件的实际路径。
-func resolvePromotionsPath(cfg *config.Config) string {
-	if cfg.Promotions != "" {
-		return cfg.Promotions
-	}
-	return appdir.PromotionsPath()
 }
 
 // describeLogPath 把「不落盘」这种情况说清楚，而不是让日志行以空值结尾。

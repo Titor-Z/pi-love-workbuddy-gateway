@@ -45,22 +45,6 @@ func TestPSKHintNeverLeaksTheKey(t *testing.T) {
 	}
 }
 
-// TestLoadDeviceHonoursNameOverride 命令行给的名字要盖过主机名，
-// 这样用户在网关那侧能把它认出来。
-func TestLoadDeviceHonoursNameOverride(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	device, err := loadDevice(&config.Config{DeviceName: "客厅 Mac"})
-	if err != nil {
-		t.Fatalf("载入失败：%v", err)
-	}
-	if device.Name != "客厅 Mac" {
-		t.Errorf("设备名 = %q，期望「客厅 Mac」", device.Name)
-	}
-	if device.ID == "" {
-		t.Error("设备 ID 不该为空")
-	}
-}
-
 // TestClientRuntimeHasNoCredential 客户端模式**必须**不加载凭证。
 //
 // 这是 P0 的硬约束：客户端手上不该有令牌。有两条理由——
@@ -72,12 +56,7 @@ func TestClientRuntimeHasNoCredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("构造日志器失败：%v", err)
 	}
-	cfg := &config.Config{
-		Mode:       config.ModeClient,
-		GatewayURL: "https://127.0.0.1:1",
-		PSK:        "x",
-		Trust:      "ab",
-	}
+	cfg := &config.Config{Mode: config.ModeClient, ListenAddr: "127.0.0.1:1"}
 	parts, err := buildRuntime(cfg, logger)
 	if err != nil {
 		t.Fatalf("装配失败：%v", err)
@@ -91,8 +70,12 @@ func TestClientRuntimeHasNoCredential(t *testing.T) {
 	if parts.authFile != "" || parts.keyID != "" {
 		t.Errorf("客户端模式不该有登录态信息：auth=%q key=%q", parts.authFile, parts.keyID)
 	}
-	if parts.backend == nil {
-		t.Error("客户端模式也要产出可用的 Backend")
+	// 未配对时没有 backend，但控制台必须起得来——配对就在那里完成。
+	if parts.backend != nil {
+		t.Error("未配对时不该有 backend")
+	}
+	if parts.pairingErr == nil {
+		t.Error("未配对时应当记下原因，供面板显示")
 	}
 }
 

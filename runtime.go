@@ -4,8 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,22 +22,12 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
+	pairingPkg "github.com/Titor-Z/pi-love-workbuddy-gateway/internal/pairing"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/panel"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relay"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relaytls"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/upstream"
 )
-
-// pairedGateway 是客户端存下的配对信息。
-//
-// 这个文件间接持有另一台机器上账号的访问权限，所以它的权限要求
-// 与主密钥文件相同（0600）——只给 psk.txt 设 0600 而把它设成 0644，
-// 等于权限白设。
-type pairedGateway struct {
-	URL         string `json:"url"`
-	PSK         string `json:"psk"`
-	Fingerprint string `json:"fingerprint"`
-}
 
 // runtime 是两种模式装配完后共用的东西。
 //
@@ -70,6 +60,12 @@ type runtime struct {
 	// syncer 是客户端模式的凭证同步器；网关模式为 nil。
 	syncer *credentialsync.Syncer
 
+	// pairingErr 非空表示客户端模式尚未配对。此时没有 backend，
+	// 控制台照常可用（配对就在那里完成），其余请求一律明确拒绝。
+	pairingErr error
+	// address 是客户端要连的网关地址，未配对时也要能显示在表单里。
+	address string
+
 	certificate tls.Certificate
 }
 
@@ -89,6 +85,9 @@ func buildRuntime(cfg *config.Config, logger *logging.Logger) (*runtime, error) 
 		return nil, err
 	}
 	if cfg.Mode == config.ModeClient {
+		// 客户端模式即使还没配对也要能起来：控制台是唯一能完成配对的
+		// 地方（密钥与指纹都在网页上填、在网页上比对），
+		// 起不来的话用户就没有入口了。
 		return buildClientRuntime(cfg, device)
 	}
 	return buildGatewayRuntime(cfg, logger, device)
@@ -103,9 +102,6 @@ func loadDevice(cfg *config.Config) (*identity.Device, error) {
 	if err != nil {
 		return nil, err
 	}
-	if cfg.DeviceName != "" {
-		device.Name = cfg.DeviceName
-	}
 	return device, nil
 }
 
@@ -113,10 +109,15 @@ func loadDevice(cfg *config.Config) (*identity.Device, error) {
 func buildGatewayRuntime(cfg *config.Config, logger *logging.Logger,
 	device *identity.Device) (*runtime, error) {
 
-	cred, cipher, err := buildCredential(cfg, logger.Printf)
+	authFile, err := credential.Locate("")
 	if err != nil {
 		return nil, err
 	}
+	cipher, err := atrest.Shared("")
+	if err != nil {
+		return nil, err
+	}
+	cred := credential.NewManager(authFile, cipher, logger.Printf, "")
 	parts := &runtime{
 		backend:    upstream.NewClient(cred, ""),
 		credential: cred,
@@ -125,10 +126,11 @@ func buildGatewayRuntime(cfg *config.Config, logger *logging.Logger,
 		keyID:      cipher.KeyID(),
 		device:     device,
 	}
-	if cfg.RelayEnabled {
-		if err := parts.enableRelay(cfg, logger); err != nil {
-			return nil, err
-		}
+	// 网关模式一律开放转发端口：多设备共享是这个模式存在的理由，
+	// 没有开关可言。想不让别人连，把 -addr 绑回 127.0.0.1 之外的
+	// 防火墙规则自己管，或者干脆别开这台机器。
+	if err := parts.enableRelay(logger); err != nil {
+		return nil, err
 	}
 	return parts, nil
 }
@@ -137,6 +139,15 @@ func buildGatewayRuntime(cfg *config.Config, logger *logging.Logger,
 func buildClientRuntime(cfg *config.Config, device *identity.Device) (*runtime, error) {
 	pairing, err := loadPairing(cfg)
 	if err != nil {
+		if errors.Is(err, errNeedsPairing) {
+			// 未配对：不建转发通道，但照常返回 runtime。
+			// 面板会显示配对表单，其余接口明确告知尚未配对。
+			return &runtime{
+				device:     device,
+				pairingErr: err,
+				address:    pairingPkg.NormalizeAddress(cfg.GatewayAddress),
+			}, nil
+		}
 		return nil, err
 	}
 	backend, err := relay.NewClient(relay.Config{
@@ -288,75 +299,36 @@ func openClientCredential() (map[string]any, error) {
 	return plain, nil
 }
 
-// loadPairing 取客户端的配对信息：命令行优先，其次读已保存的那份。
+// loadPairing 取客户端的配对信息：-addr 指定这次连哪台网关，
+// 密钥与指纹来自已保存的那份（在控制台「多设备」页填一次即可）。
+func loadPairing(cfg *config.Config) (pairingPkg.Info, error) {
+	saved, _, err := pairingPkg.Load(appdir.ClientPath())
+	if err != nil {
+		return pairingPkg.Info{}, err
+	}
+	// -addr 每次都要给：它是「这次连哪台网关」，不是本机的固定属性。
+	// 没给就沿用上次保存的那个。
+	if address := pairingPkg.NormalizeAddress(cfg.GatewayAddress); address != "" {
+		saved.URL = address
+	}
+	if err := saved.Usable(); err != nil {
+		return pairingPkg.Info{}, errNeedsPairing
+	}
+	return saved, nil
+}
+
+// errNeedsPairing 表示本机还没和网关配对过。
 //
-// 分两层是为了两种用法都能成立：第一次配手写 `-gateway -psk`，
-// 之后再启动就不必再敲一遍那些长串。
-func loadPairing(cfg *config.Config) (pairedGateway, error) {
-	pairing, err := readPairing(appdir.ClientPath())
-	if err != nil {
-		return pairedGateway{}, err
-	}
-	if cfg.GatewayURL != "" {
-		pairing.URL = cfg.GatewayURL
-	}
-	if cfg.PSK != "" {
-		pairing.PSK = cfg.PSK
-	}
-	// -trust 也可以顺手带上，一次认完直接启动，省一条命令。
-	if cfg.Trust != "" {
-		pairing.Fingerprint = cfg.Trust
-		// 顺手落盘：-trust 常常与 -sync-now 一起用来完成「认一次 + 同步」。
-		if _, err := appdir.EnsureDir(); err == nil {
-			_ = savePairing(appdir.ClientPath(), pairing)
-		}
-	}
-	switch {
-	case pairing.URL == "":
-		return pairedGateway{}, fmt.Errorf("尚未指定网关地址：用 -gateway https://<网关IP>:8790")
-	case pairing.PSK == "":
-		return pairedGateway{}, fmt.Errorf("尚未填入网关密钥：用 -psk <控制台显示的那串>")
-	case pairing.Fingerprint == "":
-		return pairedGateway{}, fmt.Errorf("尚未确认网关证书指纹：先在本机跑一次 " +
-			"`-gateway <地址> -probe` 拿到指纹，再用 -trust <指纹> 确认")
-	}
-	return pairing, nil
-}
-
-// readPairing 读配对文件；不存在就当作还没配对过。
-func readPairing(path string) (pairedGateway, error) {
-	raw, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return pairedGateway{}, nil
-	}
-	if err != nil {
-		return pairedGateway{}, fmt.Errorf("读取配对信息失败：%w", err)
-	}
-	var pairing pairedGateway
-	if err := json.Unmarshal(raw, &pairing); err != nil {
-		return pairedGateway{}, fmt.Errorf("配对文件已损坏：%w（路径 %s）", err, path)
-	}
-	return pairing, nil
-}
-
-// savePairing 写配对信息，权限 0600。
-func savePairing(path string, pairing pairedGateway) error {
-	raw, err := json.MarshalIndent(pairing, "", "  ")
-	if err != nil {
-		return fmt.Errorf("序列化配对信息失败：%w", err)
-	}
-	return os.WriteFile(path, append(raw, '\n'), 0o600)
-}
+// 它是一个专门的错误值，因为处置方式与众不同：不是修参数重试，
+// 而是去控制台填一次网关密钥、确认一次指纹。
+var errNeedsPairing = fmt.Errorf("本机尚未与网关配对：请打开控制台「多设备」页，" +
+	"填入网关密钥并确认证书指纹")
 
 // enableRelay 准备好转发服务所需的密钥与证书。
-func (r *runtime) enableRelay(cfg *config.Config, logger *logging.Logger) error {
-	psk := cfg.PSK
-	if psk == "" {
-		loaded, err := identity.LoadOrCreatePSK(appdir.PSKPath())
-		if err != nil {
-			return err
-		}
-		psk = loaded
+func (r *runtime) enableRelay(logger *logging.Logger) error {
+	psk, err := identity.LoadOrCreatePSK(appdir.PSKPath())
+	if err != nil {
+		return err
 	}
 	certificate, fingerprint, err := relaytls.LoadOrCreate(appdir.RelayCertPath(), appdir.RelayKeyPath())
 	if err != nil {
@@ -425,82 +397,6 @@ func journalPathForMode(cfg *config.Config) string {
 		return appdir.ClientJournalPath()
 	}
 	return appdir.JournalPath()
-}
-
-// pairingSummary 给日志用：地址可说，密钥与指纹只能说数量。
-func pairingSummary(pairing pairedGateway) string {
-	return fmt.Sprintf("%s（密钥 %d 位，指纹已确认 %d 位）",
-		strings.TrimSpace(pairing.URL), len(pairing.PSK), len(pairing.Fingerprint))
-}
-
-// ProbeGateway 取网关证书指纹。**不建立信任**，只把结果给用户看。
-//
-// 这一步必须与「确认」分开：信任是用户比对过、按下确认之后才成立的，
-// 连一次就信了的话，中间人换张证书照样通过。
-func ProbeGateway(ctx context.Context, gatewayURL string) (string, error) {
-	host, err := relayHostOnly(gatewayURL)
-	if err != nil {
-		return "", err
-	}
-	return relaytls.ProbeFingerprint(ctx, host)
-}
-
-// TrustGateway 确认一枚指纹并写进配对文件。
-//
-// 之后的所有连接都严格比对这个值；指纹变了会报错要求重新确认，
-// 绝不静默接受（网关重装过也会走到那一步，那是需要人看一眼的时刻）。
-func TrustGateway(cfg *config.Config, fingerprint string) (pairedGateway, error) {
-	pairing, err := loadPairing(cfg)
-	if err != nil {
-		return pairedGateway{}, err
-	}
-	pairing.Fingerprint = fingerprint
-	if _, err := appdir.EnsureDir(); err != nil {
-		return pairedGateway{}, err
-	}
-	if err := savePairing(appdir.ClientPath(), pairing); err != nil {
-		return pairedGateway{}, err
-	}
-	return pairing, nil
-}
-
-// relayHostOnly 从 URL 里取出「主机:端口」。
-func relayHostOnly(raw string) (string, error) {
-	parsed, err := url.Parse(raw)
-	if err != nil || parsed.Host == "" {
-		// 用户在命令行上常常只写 192.168.1.5:8790，补上协议再认一次。
-		parsed, err = url.Parse("https://" + raw)
-		if err != nil || parsed.Host == "" {
-			return "", fmt.Errorf("网关地址 %q 里没有主机部分", raw)
-		}
-	}
-	return parsed.Host, nil
-}
-
-// runPairing 处理「先看清钥匙、再确认信任」这两步。
-//
-// 为什么要分两步、而不是连一次就自动信任：中间人此刻也可能给你一把钥匙。
-// 用户必须有机会把那串指纹跟网关控制台上显示的比对，这一步省不掉。
-func runPairing(cfg *config.Config) error {
-	if cfg.Trust != "" {
-		pairing, err := TrustGateway(cfg, cfg.Trust)
-		if err != nil {
-			return err
-		}
-		fmt.Printf("已确认网关证书：%s\n", pairing.Fingerprint)
-		fmt.Printf("配对信息已写入 %s\n", appdir.ClientPath())
-		fmt.Printf("现在可以启动客户端了\n")
-		return nil
-	}
-	fingerprint, err := ProbeGateway(context.Background(), cfg.GatewayURL)
-	if err != nil {
-		return err
-	}
-	fmt.Printf("网关证书指纹：%s\n\n", fingerprint)
-	fmt.Printf("请与网关控制台显示的指纹比对。确认一致后执行：\n\n")
-	fmt.Printf("  %s -mode client -gateway %s -trust %s\n\n", os.Args[0], cfg.GatewayURL, fingerprint)
-	fmt.Printf("不一致就不要确认——那说明你连上的可能不是你的网关。\n")
-	return nil
 }
 
 // credentialExporter 把本机的凭证管理器暴露成 relay 能用的凭证源。
@@ -668,72 +564,8 @@ func text(obj map[string]any, key string) string {
 	return value
 }
 
-// runSwitchToGateway 把本机切成网关模式。
-//
-// 做三件事：先同步一次拿最新凭证（避免拿一份快过期的出门），
-// 解成本地登录态文件，标记副本为活跃。之后用户以 gateway 模式启动即可。
-//
-// 刻意不在这一步直接重启成网关模式：模式切换要改启动参数，
-// 而「帮用户改启动参数」比告诉他怎么改更容易出错。
-func runSwitchToGateway(cfg *config.Config) error {
-	// 先同步一次。用户可能在家但很久没连过，
-	// 手里的副本可能是几小时前的——那时令牌可能已经过期。
-	if cfg.SyncOnly {
-		return runSyncOnly(cfg)
-	}
-	problem, file, plain, err := CheckSwitchToGateway()
-	if err != nil {
-		return err
-	}
-	if problem != problemNone {
-		return fmt.Errorf("%s", problem)
-	}
-	if err := writeLocalAuthFile(plain); err != nil {
-		return err
-	}
-	if err := credentialsync.SetActive(appdir.ClientCredentialPath(), true); err != nil {
-		return err
-	}
-	fmt.Printf("已切到网关模式。\n")
-	fmt.Printf("登录态已写入：%s\n", localAuthPath())
-	fmt.Printf("凭证版本：epoch %d（同步于 %s）\n",
-		file.Epoch, file.SyncedAt.Format(time.RFC3339))
-	fmt.Printf("\n现在可以这样启动：\n\n")
-	fmt.Printf("  %s -mode gateway\n\n", os.Args[0])
-	fmt.Printf("注意：从这一刻起本机会自己刷新令牌，请先停掉客户端模式的那个进程。\n")
-	fmt.Printf("回连局域网时若面板提示凭证冲突，说明网关那份更旧——由你选择用哪一份。\n")
-	return nil
-}
-
-// runSyncOnly 只同步一次，用于出门前手动刷新凭证。
-func runSyncOnly(cfg *config.Config) error {
-	device, err := loadDevice(cfg)
-	if err != nil {
-		return err
-	}
-	parts, err := buildClientRuntime(cfg, device)
-	if err != nil {
-		return err
-	}
-	if err := parts.syncer.Sync(context.Background()); err != nil {
-		return err
-	}
-	snapshot := parts.syncer.Snapshot()
-	fmt.Printf("凭证已同步，epoch %d\n", snapshot.LastEpoch)
-	if snapshot.Conflict != nil {
-		fmt.Printf("⚠️ 本机凭证比网关新（本机 %d，网关 %d）。\\n"+
-			"这台机器此前切到网关模式自己刷新过。\\n"+
-			"用哪一份由你决定：保留本机就不用管；想用网关的，"+
-			"把本机 epoch 调低后再同步一次。\\n",
-			snapshot.Conflict.LocalEpoch, snapshot.Conflict.RemoteEpoch)
-	}
-	return nil
-}
-
 // localAuthPath 是切到网关模式后写的登录态文件路径。
-func localAuthPath() string {
-	return appdir.LocalAuthPath()
-}
+func localAuthPath() string { return appdir.LocalAuthPath() }
 
 // writeLocalAuthFile 把明文登录态写成本机文件。
 //
@@ -759,4 +591,25 @@ func writeLocalAuthFile(doc map[string]any) error {
 		return fmt.Errorf("替换登录态失败：%w", err)
 	}
 	return nil
+}
+
+// SwitchToGateway 用已同步的凭证把本机切成网关模式。
+//
+// 做两件事：把本地登录态文件写出来（gateway 模式启动时 Locate 会找到它），
+// 把凭证副本标记为活跃。之后用户停掉本进程、不带 -mode client 重启即可。
+//
+// 前置四项检查缺一不可，缺了就说清是哪一项，**不降级为本地模式**——
+// 客户端机器没装 WorkBuddy，降级等于不能用。
+func SwitchToGateway() error {
+	problem, _, plain, err := CheckSwitchToGateway()
+	if err != nil {
+		return err
+	}
+	if problem != problemNone {
+		return fmt.Errorf("%s", problem)
+	}
+	if err := writeLocalAuthFile(plain); err != nil {
+		return err
+	}
+	return credentialsync.SetActive(appdir.ClientCredentialPath(), true)
 }
