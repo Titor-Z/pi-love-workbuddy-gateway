@@ -49,6 +49,26 @@
   const paired = $derived(status?.paired !== false);
   const deviceCount = $derived(relay?.devices?.length ?? 0);
 
+  // 客户端要填的地址。后端给的是**真实网卡地址**；
+  // 拿不到（离线机器、枚举失败）时退回配置里的监听地址——
+  // 0.0.0.0 填不了，但至少是个线索，比空白强。
+  const relayAddresses = $derived(
+    relay?.addresses?.length ? relay.addresses : relay?.address ? [relay.address] : [],
+  );
+  const primaryAddress = $derived(relayAddresses[0] ?? "—");
+
+  // 复制按钮共用一个：三处要复制的东西格式不同，但反馈是同一套。
+  let copied = $state("");
+  async function copy(text, what) {
+    try {
+      await navigator.clipboard.writeText(text);
+      copied = what;
+      setTimeout(() => (copied = ""), 2000);
+    } catch {
+      error = "复制失败，请手动选中复制。";
+    }
+  }
+
   // 停用只挡一个自报的 ID——客户端换一个 ID 就能绕回来。
   // 所以「重置密钥」才是真正的踢人手段，代价是所有设备都要重新填。
   function askRevoke(device) {
@@ -213,49 +233,81 @@
       <button class="action primary" onclick={askToggle}>开启转发服务</button>
     </div>
     {:else}
-    <div class="grid stats" style="margin-bottom:20px">
+    <div class="grid stats">
+      <!-- 主角：这台机器在局域网里的地址。用户来这一页主要就是为了抄它。 -->
+      <div class="stat hero">
+        <div class="label"><span>转发地址</span></div>
+        <div class="value address" title={primaryAddress}>{primaryAddress}</div>
+        <div class="sub">客户端 client -addr 填这个</div>
+      </div>
       <div class="stat">
         <div class="label"><span>已登记设备</span></div>
-        <div class="value" style="font-size:24px">{deviceCount}</div>
+        <div class="value">{deviceCount}</div>
         <div class="sub">首次连上自动登记</div>
       </div>
       <div class="stat">
-        <div class="label"><span>转发地址</span></div>
-        <div class="value" style="font-size:24px">https://{relay.address}</div>
-        <div class="sub">客户端用 -gateway 填这个</div>
+        <div class="label"><span>转发服务</span></div>
+        <div class="value" style="font-size:20px">{relay.enabled ? "已开启" : "已关闭"}</div>
+        <div class="sub">控制台可随时开关</div>
       </div>
       <div class="stat">
-        <div class="label"><span>证书指纹</span></div>
-        <div class="value" style="font-size:14px">{relay.fingerprint}</div>
-        <div class="sub">客户端首次连接时比对</div>
+        <div class="label"><span>凭证同步</span></div>
+        <div class="value" style="font-size:20px">{sync?.enabled ? "已开启" : "已关闭"}</div>
+        <div class="sub">默认关闭</div>
       </div>
     </div>
 
     {#if freshKey}
       <div class="notice warn">
         <strong>新的网关密钥（只显示这一次）：</strong>
-        <code class="copyable">{freshKey}</code>
-        <button class="action" onclick={copyKey}>复制</button>
-        把它填进每一台客户端。此前的配对全部失效。
+        <code>{freshKey}</code>
+        <button class="action" onclick={() => copy(freshKey, "key")}>复制</button>
+        {copied === "key" ? "已复制。" : "把它填进每一台客户端。此前的配对全部失效。"}
       </div>
     {/if}
 
-    <div class="card tight">
-      <table>
+    <div class="card" style="margin-top:24px">
+      <h3>连接信息</h3>
+      <table style="margin-top:12px">
         <tbody>
           <tr>
-            <th style="width:200px">网关密钥</th>
-            <td class="num">{relay.psk_hint || "未配置"}</td>
+            <th style="width:120px">转发地址</th>
+            <td>
+              <span class="mono-small" style="color:var(--ink)">{primaryAddress}</span>
+              {#if relayAddresses.length > 1}
+                <span class="dim">　（另有 {relayAddresses.length - 1} 个网卡地址）</span>
+              {/if}
+            </td>
+            <td style="width:120px">
+              <button class="action" onclick={() => copy(primaryAddress, "addr")}>
+                复制地址
+              </button>
+            </td>
           </tr>
           <tr>
-            <th>接入凭据</th>
-            <td class="num">客户端必须带上这个密钥才能连上</td>
+            <th>网关密钥</th>
+            <td class="num">{relay.psk_hint || "未配置"}</td>
+            <td>
+              <button class="action" onclick={askReset}>重置密钥</button>
+            </td>
+          </tr>
+          <tr>
+            <th>证书指纹</th>
+            <td><span class="mono-small">{relay.fingerprint}</span></td>
+            <td>
+              <button class="action" onclick={() => copy(relay.fingerprint, "fp")}>
+                复制指纹
+              </button>
+            </td>
           </tr>
         </tbody>
       </table>
+      <p class="dim" style="margin-top:12px">
+        客户端首次连接时比对指纹，一致才建立信任。
+      </p>
     </div>
 
-    <div class="card tight" style="margin-top:20px">
+    <div class="card tight" style="margin-top:24px">
       <table>
         <thead>
           <tr>
@@ -291,48 +343,39 @@
             </tr>
           {:else}
             <tr>
-              <td colspan="5">还没有设备连上来过。</td>
+              <td colspan="5" class="dim">还没有设备连上来过。客户端配对成功后会自动出现在这里。</td>
             </tr>
           {/each}
         </tbody>
       </table>
     </div>
 
-    <div class="notice warn" style="margin-top:20px">
-      <strong>停用不是封禁。</strong>设备名是客户端自己报的，
-      持有密钥的人换一个名字就能重连。所以<strong>无法只踢一台</strong>——
-      要让人彻底连不上，只能重置密钥，代价是所有设备都要重新填入。
-    </div>
+    <p class="dim" style="margin-top:12px">
+      停用只是挡住这个 ID——设备名由客户端自报，换个名字就能重连。
+      要让人彻底连不上，只能<strong>重置密钥</strong>，代价是所有设备都要重新填。
+    </p>
 
-    <div class="card tight" style="margin-top:20px">
-      <table>
-        <tbody>
-          <tr>
-            <th style="width:200px">凭证同步</th>
-            <td class="num">{sync?.enabled ? "已开启" : "已关闭（默认）"}</td>
-          </tr>
-          <tr>
-            <th>网关凭证版本</th>
-            <td class="num">epoch {sync?.gateway_epoch ?? "—"}</td>
-          </tr>
-        </tbody>
-      </table>
+    <div class="card" style="margin-top:24px">
+      <div style="display:flex;align-items:baseline;justify-content:space-between;gap:16px;flex-wrap:wrap">
+        <h3>凭证同步</h3>
+        <span class="tag">{sync?.enabled ? "已开启" : "已关闭"}</span>
+      </div>
+      <p class="dim" style="margin-top:8px">
+        网关凭证版本 epoch {sync?.gateway_epoch ?? "—"}。
+        开启后，局域网内持有网关密钥的设备可以取走你的账号令牌（客户端加密存在自己机器上）。
+        这是比「转发请求」敏感一个量级的操作，默认关闭。
+      </p>
       <div class="actions" style="margin-top:12px">
         <button class="action" onclick={toggleSync}>
           {sync?.enabled ? "关闭凭证同步" : "开启凭证同步"}
         </button>
       </div>
-      <p class="dim" style="margin-top:12px">
-        开启后，局域网内持有网关密钥的设备可以<strong>取走你的账号令牌</strong>。
-        客户端把它加密存在自己机器上，用于外出时切到网关模式。
-        默认关闭：这是比「转发请求」敏感一个量级的操作。
-      </p>
     </div>
 
-    <div class="actions" style="margin-top:20px">
-      <button class="action danger" onclick={askReset}>重置网关密钥</button>
+    <div class="actions" style="margin-top:32px">
       <button class="action" onclick={askToggle}>关闭转发服务</button>
     </div>
+
     {/if}
   {:else if !paired}
     <!-- 客户端首次使用：先配对。密钥与指纹都在这里填、在这里比对，
@@ -350,7 +393,7 @@
               <td>
                 <input
                   type="text"
-                  placeholder="192.168.1.5:8790"
+                  placeholder="192.168.1.5:8788"
                   bind:value={pairAddress}
                   style="width:100%"
                 />

@@ -17,7 +17,6 @@ import (
 // 真实运行时密钥来自环境变量或 WorkBuddy 原生层，测试不碰它们。
 const testSecret = "c2VjcmV0LXNoYXJlZC1rZXktZm9yLXRlc3RzLW9ubHk="
 
-
 // touch 在指定目录里造一个文件，并指定修改时间。
 func touch(t *testing.T, dir, name string, modTime time.Time) string {
 	t.Helper()

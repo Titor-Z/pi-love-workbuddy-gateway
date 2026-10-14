@@ -1,4 +1,4 @@
-package main
+package netif
 
 import (
 	"net"
@@ -9,7 +9,7 @@ import (
 // TestExpandExplicitAddressStaysExplicit 显式写了某个 IP 就只绑那一个。
 // 那是在明确要求「只在这块网卡上提供服务」，不该被展开成全部网卡。
 func TestExpandExplicitAddressStaysExplicit(t *testing.T) {
-	got, err := expandListenAddrs("192.168.1.5:8788")
+	got, err := ListenAddrs("192.168.1.5:8788")
 	if err != nil {
 		t.Fatalf("解析失败：%v", err)
 	}
@@ -23,7 +23,7 @@ func TestExpandExplicitAddressStaysExplicit(t *testing.T) {
 // 这是整个端口布局的关键：127.0.0.1 要留给本机的 pi 走明文，
 // 展开时把它一起绑上会让 pi 连不上（loopback 被对外那个 TLS 口占了）。
 func TestExpandWildcardSkipsLoopback(t *testing.T) {
-	got, err := expandListenAddrs("0.0.0.0:8788")
+	got, err := ListenAddrs("0.0.0.0:8788")
 	if err != nil {
 		// 无网卡（离线机器）时报错是预期行为，不算测试失败。
 		if strings.Contains(err.Error(), "没有找到可用的局域网网卡") {
@@ -53,7 +53,7 @@ func TestExpandWildcardSkipsLoopback(t *testing.T) {
 // TestExpandRejectsBadAddress 地址写错要当场说清楚，不要留到监听时才报。
 func TestExpandRejectsBadAddress(t *testing.T) {
 	for _, bad := range []string{"192.168.1.5", "192.168.1.5:abc", "::"} {
-		if _, err := expandListenAddrs(bad); err == nil {
+		if _, err := ListenAddrs(bad); err == nil {
 			t.Errorf("%q 应当报错", bad)
 		}
 	}
@@ -62,12 +62,12 @@ func TestExpandRejectsBadAddress(t *testing.T) {
 // TestLanAddrsAllUsable 枚举出来的地址必须都能真的绑上，
 // 否则启动时会因为某块网卡而整体失败。
 func TestLanAddrsAllUsable(t *testing.T) {
-	addresses, err := lanAddrs("0")
+	addresses, err := LANAddrs("0")
 	if err != nil {
 		t.Fatalf("枚举失败：%v", err)
 	}
 	for _, address := range addresses {
-		listener, listenErr := listenOne(address)
+		listener, listenErr := net.Listen("tcp", address)
 		if listenErr != nil {
 			t.Errorf("%s 绑不上：%v", address, listenErr)
 			continue

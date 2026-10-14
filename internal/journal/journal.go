@@ -26,11 +26,14 @@ import (
 	"bufio"
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
 
 // Kind 是事件类型。
@@ -135,6 +138,29 @@ type Record struct {
 	Device string `json:"device,omitempty"`
 }
 
+// payloadLimit 是单条事件里对话正文的留存上限（64KB，按字节）。
+//
+// 这个上限不是「够不够用」的取舍，而是**读取器的硬约束**：
+// 事件文件是 JSONL，一行就是一条记录。一行没有上限，读取器就得
+// 无限缓冲；反过来给读取器设上限，超长的那一行就会让整次读取失败。
+// 两头各设一道：写入时截断（这里），读取时跳过（readLine）。
+const payloadLimit = 64 << 10
+
+// truncatePayload 把过长的正文截断并留下标记。
+//
+// 按字节截断可能切在多字节字符中间，所以要回退到最后一个完整字符的
+// 边界上——否则截出来的尾巴是乱码，用户会以为文件坏了。
+func truncatePayload(text string) string {
+	if len(text) <= payloadLimit {
+		return text
+	}
+	cut := payloadLimit
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return text[:cut] + "\n…（正文过长，已截断）"
+}
+
 // payloadTTL 是带对话正文的事件保留时长。超过这个时长的拦截/拒答正文会被
 // 读取时脱敏（置空），避免日志文件无限膨胀、也缩短明文对话落盘的暴露窗口。
 // 正常对话不存正文，不受此限。
@@ -206,6 +232,11 @@ func (j *Journal) Append(record Record) {
 	if record.Time.IsZero() {
 		record.Time = time.Now()
 	}
+	// 正文必须在**写入时**就有上限。它是给复盘用的，不需要全文；
+	// 不设上限的话一次大请求就能写出一行几百 KB 的记录，
+	// 之后整个面板都读不出事件——曾经就是这样炸的。
+	record.RequestText = truncatePayload(record.RequestText)
+	record.ResponseText = truncatePayload(record.ResponseText)
 	// 不用 json.Marshal：它会把 < > & 转义成 \u003c 之类，
 	// 而这些字符在模型名、错误信息里很常见，转义后 grep 与 jq 都难用。
 	var buffer bytes.Buffer
@@ -251,11 +282,20 @@ func (j *Journal) ReadSince(since time.Time) ([]Record, error) {
 	defer file.Close()
 
 	records := make([]Record, 0, 256)
-	scanner := bufio.NewScanner(file)
-	// 单条事件可能带上较长的错误信息，默认 64KB 的上限留足余量。
-	scanner.Buffer(make([]byte, 0, 64<<10), 1<<20)
-	for scanner.Scan() {
-		line := scanner.Bytes()
+	reader := bufio.NewReaderSize(file, 64<<10)
+	for {
+		line, tooLong, err := readLine(reader)
+		if tooLong {
+			// 老版本写下的超长行。跳过它继续读后面的——
+			// 读不出**一条**记录，不该让整个面板空白。
+			if err != nil {
+				break
+			}
+			continue
+		}
+		if err != nil {
+			break
+		}
 		if len(line) == 0 {
 			continue
 		}
@@ -270,8 +310,45 @@ func (j *Journal) ReadSince(since time.Time) ([]Record, error) {
 		// 过期的对话正文脱敏后再返回，避免明文长期留在读取结果里。
 		records = append(records, record.RedactPayloads(time.Now()))
 	}
-	if err := scanner.Err(); err != nil {
-		return records, fmt.Errorf("读取事件文件失败：%w", err)
-	}
 	return records, nil
+}
+
+// maxLineBytes 是单行事件的读取上限，只作兜底。
+//
+// 写入侧（truncatePayload）已经把正文截到 payloadLimit 以内，正常记录
+// 远小于这个值。这个上限防的是**老版本写下的**超长行。
+const maxLineBytes = 8 << 20
+
+// readLine 读一整行，行为接近 bufio.Scanner 但不因超长而终止。
+//
+// 行超过 maxLineBytes 时返回 tooLong=true 并丢掉该行的剩余部分，
+// 让调用方跳过这一行继续读下一行。
+// 返回 io.EOF 表示读完了。
+func readLine(reader *bufio.Reader) (line []byte, tooLong bool, err error) {
+	var buffer []byte
+	for {
+		chunk, readErr := reader.ReadSlice('\n')
+		if !tooLong {
+			if len(buffer)+len(chunk) > maxLineBytes {
+				// 这一行太长了，丢掉已读的部分，剩下的边读边丢。
+				tooLong = true
+				buffer = nil
+			} else {
+				buffer = append(buffer, chunk...)
+			}
+		}
+		switch {
+		case readErr == nil:
+			return buffer, tooLong, nil
+		case errors.Is(readErr, bufio.ErrBufferFull):
+			continue
+		case errors.Is(readErr, io.EOF):
+			if len(buffer) == 0 && !tooLong {
+				return nil, false, io.EOF
+			}
+			return buffer, tooLong, nil
+		default:
+			return buffer, tooLong, readErr
+		}
+	}
 }

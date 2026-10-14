@@ -14,6 +14,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/devices"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/netif"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/pairing"
 )
 
@@ -73,11 +74,28 @@ func (p *Panel) setRelayEnabled(enabled bool) error {
 // 这里**不返回密钥本身**，只给一个看不出内容的提示：
 // 密钥出现在 /api/status 里，等于把账号开放给任何能访问面板的地方。
 type relayResponse struct {
-	Enabled     bool            `json:"enabled"`
-	Address     string          `json:"address"`
+	Enabled bool `json:"enabled"`
+	// Address 是配置里的监听地址（形如 0.0.0.0:8788），只用于展示「绑在哪」。
+	Address string `json:"address"`
+	// Addresses 是**真正可连的**地址列表（每块局域网网卡一个）。
+	// 客户端要照着这个填：0.0.0.0 是填不了的，那是「本机所有网卡」的意思，
+	// 不是任何一个可以连过去的地址。
+	Addresses   []string        `json:"addresses"`
 	Fingerprint string          `json:"fingerprint"`
 	PSKHint     string          `json:"psk_hint,omitempty"`
 	Devices     []devices.Entry `json:"devices"`
+}
+
+// reachableAddrs 把监听地址翻译成客户端能真正连上的地址。
+//
+// 枚举失败或没有可用网卡时返回空列表——面板会退回显示配置里的地址，
+// 那至少是个线索，比空白强。
+func reachableAddrs(listenAddr string) []string {
+	addresses, err := netif.ListenAddrs(listenAddr)
+	if err != nil {
+		return []string{}
+	}
+	return addresses
 }
 
 // handleRelay 返回转发服务的状态与已登记的设备。
@@ -92,6 +110,7 @@ func (p *Panel) handleRelay(w http.ResponseWriter, _ *http.Request) {
 	response := relayResponse{
 		Enabled:     p.deps.RelayEnabled,
 		Address:     p.deps.RelayAddr,
+		Addresses:   reachableAddrs(p.deps.RelayAddr),
 		Fingerprint: p.deps.TLSFingerprint,
 		PSKHint:     p.deps.PSKHint,
 		Devices:     []devices.Entry{},

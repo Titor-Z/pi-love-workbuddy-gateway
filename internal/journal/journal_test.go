@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 // TestOpenCreatesDirectory 首次运行时目录还不存在，要能自动建出来。
@@ -287,5 +288,82 @@ func TestRedactPayloadsSkipsEmpty(t *testing.T) {
 	got := old.RedactPayloads(time.Now())
 	if got.Credit != 3 || got.RequestText != "" {
 		t.Errorf("无正文事件应原样返回，得到 %+v", got)
+	}
+}
+
+// TestAppendTruncatesHugePayload 写入时就必须给正文设上限。
+//
+// 这是从一个真实故障来的：失败事件会留存请求/响应正文，而正文没有上限，
+// 一次大请求写下几百 KB 的一行，之后读取器一炸，整个面板的事件都读不出来
+// （「读取事件文件失败：bufio.Scanner: token too long」）。
+func TestAppendTruncatesHugePayload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gateway.jsonl")
+	instance, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open 失败：%v", err)
+	}
+	defer instance.Close()
+
+	huge := strings.Repeat("啊", payloadLimit) // 3 字节一个字符，远超上限
+	instance.Append(Record{
+		Kind:         KindChat,
+		RequestText:  huge,
+		ResponseText: huge,
+	})
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat 失败：%v", err)
+	}
+	// 两个正文各截到上限附近；再加 JSON 转义与其它字段，留一倍余量。
+	if info.Size() > 4*payloadLimit {
+		t.Errorf("落盘 %d 字节，正文没有截断", info.Size())
+	}
+
+	records, err := instance.ReadSince(time.Time{})
+	if err != nil {
+		t.Fatalf("读回失败：%v", err)
+	}
+	if len(records) != 1 {
+		t.Fatalf("读回 %d 条，期望 1 条", len(records))
+	}
+	if !strings.Contains(records[0].RequestText, "已截断") {
+		t.Error("截断后应当留下标记，否则用户以为正文就这么长")
+	}
+	// 截在字符边界上：整条记录必须是合法的 UTF-8，不能出现半个汉字。
+	if !utf8.ValidString(records[0].RequestText) {
+		t.Error("截断切在了多字节字符中间，尾巴是乱码")
+	}
+}
+
+// TestReadSkipsOverLongLine 读取超长行时跳过它继续读，而不是整次失败。
+//
+// 老版本写下的文件里已经有这样的行，用户不该为此丢掉全部历史。
+func TestReadSkipsOverLongLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "gateway.jsonl")
+
+	var builder strings.Builder
+	builder.WriteString(`{"kind":"chat","msg":"第一条"}` + "\n")
+	builder.WriteString(`{"kind":"chat","msg":"` + strings.Repeat("x", maxLineBytes+1024) + `"}` + "\n")
+	builder.WriteString(`{"kind":"chat","msg":"第三条"}` + "\n")
+	if err := os.WriteFile(path, []byte(builder.String()), 0o600); err != nil {
+		t.Fatalf("写测试文件失败：%v", err)
+	}
+
+	instance, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open 失败：%v", err)
+	}
+	defer instance.Close()
+
+	records, err := instance.ReadSince(time.Time{})
+	if err != nil {
+		t.Fatalf("超长行不该让整次读取失败：%v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("读回 %d 条，期望 2 条（超长的那条被跳过）", len(records))
+	}
+	if records[0].Message != "第一条" || records[1].Message != "第三条" {
+		t.Errorf("读回的不是首尾两条：%q / %q", records[0].Message, records[1].Message)
 	}
 }

@@ -252,6 +252,16 @@ code.copyable {
 }
 
 /* 次要说明：次级文字色，不用 opacity（design.md：弱化不用透明度）。 */
+/* 指纹这类长十六进制串：等宽、小一号、可换行。
+   它不是数字，不该占一个统计块的大字号位置。 */
+.mono-small {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.5;
+  word-break: break-all;
+  color: var(--muted);
+}
+
 .dim {
   color: var(--muted);
 }
@@ -539,6 +549,18 @@ footer {
   white-space: nowrap;
 }
 
+/* 主角是**地址**而不是数字时用这一档。
+   地址比数字长得多：`192.168.31.37:8788` 是 18 个字符，等宽字体下约 10.8em。
+   主角列宽约 460px，减掉内边距剩 428px，所以字号上限压到 36px 才放得下——
+   直接沿用数字那档 64px 只会折行，而**主角不许折行**。 */
+.stat.hero .value.address {
+  font-size: clamp(20px, 2.8vw, 36px);
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .stat.hero .value small {
   font-size: 0.36em;
   letter-spacing: 0;
@@ -701,6 +723,13 @@ th.num {
    它是物理反馈（东西被按了），不是装饰。
    用位移而不是柔光：位移属于印刷语言，柔光不属于。
    注意 hover/active 都**不设过渡**，反馈必须立刻到位。 */
+/* 按钮里的字不许折行。中文标签折成两行（「复制」/「地址」）会把表格行撑高，
+   一行高一行矮，纵向对齐就散了。 */
+button.action,
+button.action * {
+  white-space: nowrap;
+}
+
 button.action {
   font-family: var(--font-body);
   font-size: 12px;

@@ -21,6 +21,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/gateway"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/netif"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/panel"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relaytls"
 )
@@ -185,7 +186,7 @@ func runServe(cfg *config.Config, args []string) error {
 	var relayListeners []net.Listener
 	var relayServer *http.Server
 	if parts.relay != nil {
-		addresses, expandErr := expandListenAddrs(cfg.RelayAddr)
+		addresses, expandErr := netif.ListenAddrs(cfg.RelayAddr)
 		if expandErr != nil {
 			return expandErr
 		}

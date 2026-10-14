@@ -125,7 +125,7 @@ func (c *Client) retryUnauthorized(ctx context.Context, body []byte, previousTok
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 		_ = resp.Body.Close()
 		return nil, fmt.Errorf("%w（HTTP 401）：%s",
-				credential.ErrUnauthorized, truncate(string(raw), errorTextLimit))
+			credential.ErrUnauthorized, truncate(string(raw), errorTextLimit))
 	}
 	return resp, nil
 }
