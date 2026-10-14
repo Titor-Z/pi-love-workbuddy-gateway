@@ -22,6 +22,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/config"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/gateway"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/upstream"
 )
@@ -592,5 +593,128 @@ func TestHealthNeverLeaksToken(t *testing.T) {
 		if strings.Contains(body, secret) {
 			t.Errorf("健康检查泄漏了凭据 %q：%s", secret, body)
 		}
+	}
+}
+
+// newGatewayWithJournal 与 newGateway 类似，但会接一个真实的事件文件，
+// 便于测试「事件里到底记了什么」。
+func newGatewayWithJournal(t *testing.T, backend *fakeBackend, apiKey string, expiresAt time.Time) (http.Handler, string) {
+	t.Helper()
+	authFile := writeAuthFile(t, t.TempDir(), testAccessToken, testRefreshToken, expiresAt)
+
+	cipher, err := atrest.NewCipher(testSecret)
+	if err != nil {
+		t.Fatalf("构造解密器失败：%v", err)
+	}
+	promotions, err := catalog.LoadPromotions("")
+	if err != nil {
+		t.Fatalf("加载促销配置失败：%v", err)
+	}
+	logger, err := logging.New(filepath.Join(t.TempDir(), "test.log"), false)
+	if err != nil {
+		t.Fatalf("构造日志器失败：%v", err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+
+	journalPath := filepath.Join(t.TempDir(), "gateway.jsonl")
+	events, err := journal.Open(journalPath)
+	if err != nil {
+		t.Fatalf("打开事件文件失败：%v", err)
+	}
+	t.Cleanup(func() { _ = events.Close() })
+
+	cred := credential.NewManager(authFile, cipher, nil, backend.URL())
+	server := gateway.NewServer(
+		&config.Config{ListenAddr: "127.0.0.1:8788", APIKey: apiKey},
+		cred,
+		upstream.NewClient(cred, backend.URL()),
+		promotions,
+		logger,
+		events,
+	)
+	return server.Handler(), journalPath
+}
+
+// readLastChatEvent 读出事件文件里最近一条对话事件。
+func readLastChatEvent(t *testing.T, path string) journal.Record {
+	t.Helper()
+	records, err := journal.Open(path)
+	if err != nil {
+		t.Fatalf("打开事件文件失败：%v", err)
+	}
+	defer records.Close()
+	all, err := records.ReadSince(time.Time{})
+	if err != nil {
+		t.Fatalf("读取事件失败：%v", err)
+	}
+	for i := len(all) - 1; i >= 0; i-- {
+		if all[i].Kind == journal.KindChat {
+			return all[i]
+		}
+	}
+	t.Fatal("事件文件里没有任何对话事件")
+	return journal.Record{}
+}
+
+// TestChatPolicyCodeMarksBlocked 后端非 200 且 code=11128（安全策略拦截）时，
+// 事件必须确定记为拦截，且记录具体原因，不靠扫正文猜。
+func TestChatPolicyCodeMarksBlocked(t *testing.T) {
+	backend := newFakeBackend(t)
+	backend.chatStatus = http.StatusForbidden
+	backend.chatRaw = `{"code":11128,"msg":"安全策略拦截"}`
+	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+
+	recorder := postChat(t, handler, `{"model":"glm-5.3","messages":[{"role":"user","content":"hi"}]}`)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("状态码 = %d，期望 403", recorder.Code)
+	}
+	event := readLastChatEvent(t, journalPath)
+	if !event.Blocked {
+		t.Errorf("11128 应确定记为拦截，得到 blocked=%v", event.Blocked)
+	}
+	if event.BlockedReason != "policy" {
+		t.Errorf("拦截原因应为 policy，得到 %q", event.BlockedReason)
+	}
+	if event.Upstream == nil || event.Upstream.Code != 11128 {
+		t.Errorf("应记录上游码 11128，得到 %+v", event.Upstream)
+	}
+}
+
+// TestChatNonPolicyErrorNotBlocked 普通上游错误（非策略码）不应算拦截。
+func TestChatNonPolicyErrorNotBlocked(t *testing.T) {
+	backend := newFakeBackend(t)
+	backend.chatStatus = http.StatusBadRequest
+	backend.chatRaw = `{"code":40001,"msg":"模型不存在"}`
+	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+
+	postChat(t, handler, `{"model":"nope","messages":[{"role":"user","content":"hi"}]}`)
+
+	event := readLastChatEvent(t, journalPath)
+	if event.Blocked {
+		t.Error("普通错误码不应计入拦截")
+	}
+	if event.Upstream == nil || event.Upstream.Code != 40001 {
+		t.Errorf("应记录上游码 40001，得到 %+v", event.Upstream)
+	}
+}
+
+// TestChatRefusalHeuristicFlagged 流式 200 但回复是礼貌拒答时，
+// 不标 Blocked，但标 Refused（启发式），且不落任何对话内容。
+func TestChatRefusalHeuristicFlagged(t *testing.T) {
+	backend := newFakeBackend(t)
+	backend.chatRaw = "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"抱歉，我不能提供这个内容\"},\"finish_reason\":\"stop\"}]}\n" +
+		"data: {\"id\":\"1\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}\n" +
+		"data: [DONE]\n"
+	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+
+	postChat(t, handler, `{"model":"glm-5.3","messages":[{"role":"user","content":"hi"}]}`)
+
+	event := readLastChatEvent(t, journalPath)
+	if event.Blocked {
+		t.Error("礼貌拒答不应算确定拦截")
+	}
+	if !event.Refused {
+		t.Error("礼貌拒答应标为疑似拒答（Refused）")
 	}
 }

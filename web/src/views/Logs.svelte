@@ -7,6 +7,7 @@
   let error = $state("");
   let loading = $state(true);
   let onlyBlocked = $state(false);
+  let onlyRefused = $state(false);
   let onlyChat = $state(false);
   let view = $state("timeline"); // timeline | detail
   let page = $state(1);
@@ -44,10 +45,13 @@
   const visible = $derived(
     events.filter((event) => {
       if (onlyBlocked && !event.blocked) return false;
+      if (onlyRefused && !event.refused) return false;
       if (onlyChat && event.kind !== "chat") return false;
       return true;
     }),
   );
+
+  const refusedTotal = $derived(events.filter((e) => e.refused).length);
 
   // 明细表只列对话。其它事件（启动、续期）没有 token 和费用，
   // 混进来会留一堆空列，反而看不清想问的那件事。
@@ -69,13 +73,14 @@
 
   // 明细表底下的小结：只统计当前筛出来的这些。
   const summary = $derived.by(() => {
-    const total = { requests: chats.length, credit: 0, in: 0, out: 0, cached: 0, blocked: 0 };
+    const total = { requests: chats.length, credit: 0, in: 0, out: 0, cached: 0, blocked: 0, refused: 0 };
     for (const event of chats) {
       total.credit += event.credit ?? 0;
       total.in += event.in ?? 0;
       total.out += event.out ?? 0;
       total.cached += event.cached ?? 0;
       if (event.blocked) total.blocked++;
+      if (event.refused) total.refused++;
     }
     total.cacheRate = total.in > 0 ? total.cached / total.in : 0;
     return total;
@@ -89,7 +94,7 @@
 <section class="section">
   <header>
     <h2>运行事件</h2>
-    <span class="hint">最近 {events.length} 条 · {blockedTotal} 次命中内容审核</span>
+    <span class="hint">最近 {events.length} 条 · {blockedTotal} 次确定拦截 · {refusedTotal} 次疑似拒答</span>
   </header>
 
   <div class="bar" style="margin-bottom:12px">
@@ -104,7 +109,10 @@
       只看对话
     </button>
     <button class="action" aria-pressed={onlyBlocked} onclick={() => (onlyBlocked = !onlyBlocked)}>
-      只看被拦截
+      只看确定拦截
+    </button>
+    <button class="action" aria-pressed={onlyRefused} onclick={() => (onlyRefused = !onlyRefused)}>
+      只看疑似拒答
     </button>
     <button class="action" onclick={load} disabled={loading}>刷新</button>
   </div>
@@ -120,7 +128,7 @@
       <div class="stat">
         <div class="label"><span>请求</span></div>
         <div class="value" style="font-size:24px">{summary.requests}</div>
-        <div class="sub">{summary.blocked} 次被拦截</div>
+        <div class="sub">{summary.blocked} 次确定拦截 · {summary.refused} 次疑似拒答</div>
       </div>
       <div class="stat">
         <div class="label"><span>合计消耗</span></div>
@@ -152,6 +160,8 @@
             <tr>
               <th style="width:96px">时间</th>
               <th>模型</th>
+              <th>结束</th>
+              <th>拦截原因</th>
               <th class="num">输入</th>
               <th class="num">命中</th>
               <th class="num">输出</th>
@@ -167,7 +177,14 @@
                 <td class="num">
                   {event.model}
                   {#if event.blocked}<span class="tag blocked">拦截</span>{/if}
+                  {#if event.refused}<span class="tag promo">拒答</span>{/if}
                   {#if event.err}<span class="tag promo">失败</span>{/if}
+                </td>
+                <td class="num">{event.finish ?? "—"}</td>
+                <td class="num">
+                  {#if event.blocked_reason}<span class="tag blocked">{event.blocked_reason}</span>{/if}
+                  {#if event.refused}<span class="tag promo" title={event.refuse_rule}>疑似拒答</span>{/if}
+                  {#if !event.blocked && !event.refused}—{/if}
                 </td>
                 <td class="num">{event.in ?? 0}</td>
                 <td class="num">
@@ -192,11 +209,17 @@
     {/if}
   {:else}
     <div class="notice warn">
-      <strong>关于「被拦截」</strong>：本工具只把后端给出的<strong>结构信号</strong>当作拦截——
-      <code>finish_reason=content_filter</code> 或非空 <code>refusal</code>。除此之外后端并不会在
-      流里给出可靠标记，所以<strong>礼貌拒答（「抱歉我不能……」）不会被计入</strong>，这是有意为之，
-      不要把它当成漏报。<strong>不改动任何字节</strong>——pi 收到的内容与后端发来的完全一致。
-      因为这个标记只看结构信号，少数情况后端用非标准字段告知拦截时会漏记，只能当参考。
+      <strong>关于「拦截」与「拒答」</strong>：本工具把判定分成两栏，请分开理解：
+      <ul>
+        <li><strong>确定拦截</strong>：后端亲口承认拦了——流式通道的
+          <code>finish_reason=content_filter</code> / 非空 <code>refusal</code>，或硬阻断通道的
+          策略码（如非 200 的 <code>11128 安全策略拦截</code>）。这部分是准的。</li>
+        <li><strong>疑似拒答</strong>：模型礼貌说「抱歉我不能……」时，后端给的也是
+          <code>finish_reason=stop</code>，和正常回复没有结构区别，协议层<strong>无法</strong>可靠识别。
+          这栏是本工具的<strong>文本启发式猜测</strong>，可能误报也可能漏报，<strong>不计入拦截率</strong>。</li>
+      </ul>
+      <strong>不改动任何字节</strong>——pi 收到的内容与后端发来的完全一致。拦截逻辑集中在
+      <code>internal/blocked</code> 一个模块里，日后发现新的策略码或拒答说法，只改那一处即可。
     </div>
 
     {#if loading && events.length === 0}

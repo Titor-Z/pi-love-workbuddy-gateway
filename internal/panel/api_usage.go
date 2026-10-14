@@ -18,11 +18,13 @@ type usageDay struct {
 	Date     string             `json:"date"`     // 形如 2026-10-14
 	Requests int                `json:"requests"` // 当天请求数
 	Credit   float64            `json:"credit"`   // 当天消耗
-	Blocked  int                `json:"blocked"`  // 当天被内容审核拦下的次数
-	In       int                `json:"in"`       // 当天输入 token
-	Out      int                `json:"out"`      // 当天输出 token
-	Cached   int                `json:"cached"`   // 其中命中缓存的输入 token
-	ByModel  map[string]float64 `json:"by_model"` // 按模型拆分的消耗，用于堆叠
+	Blocked  int                `json:"blocked"`   // 当天确定被内容审核拦下的次数（结构信号或策略码）
+	Refused  int                `json:"refused"`   // 当天疑似礼貌拒答的次数（文本启发式）
+	In       int                `json:"in"`        // 当天输入 token
+	Out      int                `json:"out"`       // 当天输出 token
+	Cached   int                `json:"cached"`    // 其中命中缓存的输入 token
+	ByModel  map[string]float64 `json:"by_model"`  // 按模型拆分的消耗，用于堆叠
+	ByReason map[string]int     `json:"by_reason"` // 按确定拦截原因拆分的次数
 }
 
 // usageModel 是「按模型」的汇总，对应饼图或排行条。
@@ -33,14 +35,17 @@ type usageModel struct {
 	In       int     `json:"in"`
 	Out      int     `json:"out"`
 	Cached   int     `json:"cached"`
+	Blocked  int     `json:"blocked"`
+	Refused  int     `json:"refused"`
 }
 
 // usageTotals 是窗口内的合计。
 type usageTotals struct {
 	Requests  int     `json:"requests"`
 	Credit    float64 `json:"credit"`
-	Blocked   int     `json:"blocked"`
-	BlockRate float64 `json:"block_rate"` // 命中数 ÷ 请求数
+	Blocked   int     `json:"blocked"`    // 确定被拦（含 11128 策略码与 content_filter/refusal）
+	BlockRate float64 `json:"block_rate"`  // 确定被拦数 ÷ 请求数
+	Refused   int     `json:"refused"`    // 疑似拒答（启发式，不计入拦截率）
 
 	In     int `json:"in"`
 	Out    int `json:"out"`
@@ -102,8 +107,9 @@ func aggregate(records []journal.Record, from, to time.Time, days int) usageResp
 		date := from.AddDate(0, 0, offset).Format("2006-01-02")
 		index[date] = len(response.Days)
 		response.Days = append(response.Days, usageDay{
-			Date:    date,
-			ByModel: map[string]float64{},
+			Date:     date,
+			ByModel:  map[string]float64{},
+			ByReason: map[string]int{},
 		})
 	}
 
@@ -133,6 +139,14 @@ func aggregate(records []journal.Record, from, to time.Time, days int) usageResp
 		day.ByModel[model] += record.Credit
 		if record.Blocked {
 			day.Blocked++
+			reason := record.BlockedReason
+			if reason == "" {
+				reason = "other"
+			}
+			day.ByReason[reason]++
+		}
+		if record.Refused {
+			day.Refused++
 		}
 
 		entry, ok := byModel[model]
@@ -145,6 +159,12 @@ func aggregate(records []journal.Record, from, to time.Time, days int) usageResp
 		entry.In += record.In
 		entry.Out += record.Out
 		entry.Cached += record.Cached
+		if record.Blocked {
+			entry.Blocked++
+		}
+		if record.Refused {
+			entry.Refused++
+		}
 
 		response.Totals.Requests++
 		response.Totals.Credit += record.Credit
@@ -153,6 +173,9 @@ func aggregate(records []journal.Record, from, to time.Time, days int) usageResp
 		response.Totals.Cached += record.Cached
 		if record.Blocked {
 			response.Totals.Blocked++
+		}
+		if record.Refused {
+			response.Totals.Refused++
 		}
 	}
 

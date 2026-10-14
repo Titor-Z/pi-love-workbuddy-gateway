@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/blocked"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 )
 
@@ -61,12 +62,24 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	if resp.StatusCode != http.StatusOK {
 		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
-		message := fmt.Sprintf("✗ HTTP %d | %s | %s", resp.StatusCode, modelName, truncate(string(raw), 300))
+		msg := truncate(string(raw), 300)
+		// 非 200 时尝试解析后端 JSON 错误体里的 {code,msg}，
+		// 命中内容策略码（blocked.FromPolicy）才算「确定被拦」。
+		var errBody struct {
+			Code int    `json:"code"`
+			Msg  string `json:"msg"`
+		}
+		_ = json.Unmarshal(raw, &errBody)
+		policyVerdict := blocked.FromPolicy(errBody.Code, errBody.Msg)
+		message := fmt.Sprintf("✗ HTTP %d | %s | %s", resp.StatusCode, modelName, msg)
 		s.logger.Printf("%s", message)
 		s.recordChat(journal.Record{
 			Kind: journal.KindChat, Model: modelName, Stream: streaming,
 			Status: resp.StatusCode, Millis: time.Since(started).Milliseconds(),
-			Message: message, Error: truncate(string(raw), 300),
+			Message: message, Error: msg,
+			Blocked: policyVerdict.Blocked, BlockedReason: string(policyVerdict.Reason),
+			Upstream: &journal.UpstreamError{HTTP: resp.StatusCode, Code: errBody.Code, Msg: errBody.Msg},
+			Request: summarizeRequest(clientBody),
 		})
 		writeUpstreamError(w, resp.StatusCode, raw)
 		return
@@ -75,7 +88,7 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	observer := newStreamObserver(resp.Body)
 	if streaming {
 		s.relayStream(w, observer)
-		s.finishChat(modelName, observer, started, true, http.StatusOK, "")
+		s.finishChat(modelName, observer, started, true, http.StatusOK, "", clientBody)
 		return
 	}
 	result, err := aggregateStream(observer)
@@ -85,19 +98,20 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.recordChat(journal.Record{
 			Kind: journal.KindChat, Model: modelName,
 			Status: http.StatusBadGateway, Millis: time.Since(started).Milliseconds(),
-			Message: message, Error: err.Error(),
+			Message: message, Error: err.Error(), Request: summarizeRequest(clientBody),
 		})
 		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
 	}
-	s.finishChat(modelName, observer, started, false, http.StatusOK, "")
+	s.finishChat(modelName, observer, started, false, http.StatusOK, "", clientBody)
 	writeJSON(w, http.StatusOK, result)
 }
 
 // finishChat 在请求结束时记一条事件，并补一条人类可读的日志。
 // 流式与非流式共用同一条记录路径，避免两边统计口径不一致。
+// clientBody 只用于请求侧轻量摘要，不会取其文本内容。
 func (s *Server) finishChat(modelName string, observer *streamObserver,
-	started time.Time, streaming bool, status int, failure string) {
+	started time.Time, streaming bool, status int, failure string, clientBody map[string]any) {
 
 	cost := time.Since(started).Round(time.Millisecond)
 	usage := observer.Usage()
@@ -112,12 +126,22 @@ func (s *Server) finishChat(modelName string, observer *streamObserver,
 	if cached := usage.Cached(); cached > 0 {
 		cacheTag = fmt.Sprintf(" | 缓存命中 %d/%d", cached, usage.Prompt)
 	}
-	blockedTag := ""
-	if observer.Blocked() {
-		blockedTag = " | ⚠️命中内容审核"
+
+	// 三通道合并成最终结论：结构信号 / 策略码（确定拦截）> 文本拒答猜测（疑似）。
+	structural := blocked.FromStructure(observer.FinishReason(), observer.Refusal())
+	policy := blocked.Verdict{} // 流式 200 通道没有策略码，留空
+	refused, refuseRule := blocked.ClassifyText(observer.AssistantText())
+	verdict := blocked.Merge(structural, policy, refused, refuseRule)
+
+	tags := ""
+	if verdict.Blocked {
+		tags += " | ⚠️命中内容审核(" + string(verdict.Reason) + ")"
+	}
+	if verdict.Refused {
+		tags += " | 疑似拒答"
 	}
 	message := fmt.Sprintf("◀ %s | %s | %s完成 | credit=%g%s%s",
-		modelName, cost, mode, usage.Credit, cacheTag, blockedTag)
+		modelName, cost, mode, usage.Credit, cacheTag, tags)
 	if failure == "" {
 		s.logger.Printf("%s", message)
 	} else {
@@ -125,19 +149,43 @@ func (s *Server) finishChat(modelName string, observer *streamObserver,
 	}
 
 	s.recordChat(journal.Record{
-		Kind:    journal.KindChat,
-		Message: message,
-		Model:   modelName,
-		Credit:  usage.Credit,
-		In:      usage.Prompt,
-		Out:     usage.Completion,
-		Cached:  usage.Cached(),
-		Millis:  cost.Milliseconds(),
-		Status:  status,
-		Stream:  streaming,
-		Blocked: observer.Blocked(),
-		Error:   failure,
+		Kind:         journal.KindChat,
+		Message:      message,
+		Model:        modelName,
+		Credit:       usage.Credit,
+		In:           usage.Prompt,
+		Out:          usage.Completion,
+		Cached:       usage.Cached(),
+		Millis:       cost.Milliseconds(),
+		Status:       status,
+		Stream:       streaming,
+		Blocked:      verdict.Blocked,
+		BlockedReason: string(verdict.Reason),
+		Refused:      verdict.Refused,
+		RefuseRule:   string(verdict.RefuseRule),
+		FinishReason: observer.FinishReason(),
+		Tools:        observer.ToolNames(),
+		Request:      summarizeRequest(clientBody),
+		Error:        failure,
 	})
+}
+
+// summarizeRequest 从客户端请求体里取出轻量摘要，不含任何对话内容。
+func summarizeRequest(clientBody map[string]any) *journal.RequestSummary {
+	if clientBody == nil {
+		return nil
+	}
+	summary := &journal.RequestSummary{Stream: wantsStream(clientBody)}
+	if messages, ok := clientBody["messages"].([]any); ok {
+		summary.Messages = len(messages)
+	}
+	if _, ok := clientBody["tools"]; ok {
+		summary.HasTools = true
+	}
+	if n, ok := clientBody["max_tokens"].(float64); ok {
+		summary.MaxTokens = int(n)
+	}
+	return summary
 }
 
 // recordChat 把事件写入 journal。没接 journal 时静默跳过，便于测试单独跑网关。

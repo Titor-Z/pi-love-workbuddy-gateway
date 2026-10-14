@@ -62,15 +62,57 @@ type Record struct {
 	Status int   `json:"status,omitempty"`
 	Stream bool  `json:"stream,omitempty"`
 
-	// Blocked 表示这次响应里出现了内容审核标记。
+	// Blocked 表示这次响应里出现了内容审核标记（确定信号：
+	// 流式通道的 content_filter / 非空 refusal，或硬阻断通道的策略码）。
 	// 它是面板上「拦截率」的唯一来源，务必如实记录。
+	// 文本级的「礼貌拒答」猜测不计入这一栏（见 Refused），那只是疑似。
 	Blocked bool `json:"blocked,omitempty"`
+
+	// BlockedReason 是确定拦截的细分原因：content_filter / refusal / policy。
+	// 未拦截时为空。面板用它按原因分组，日志也据此拼 msg。
+	BlockedReason string `json:"blocked_reason,omitempty"`
+
+	// Refused 表示模型疑似礼貌拒答（文本启发式，来源是 blocked 包的拒答短语表）。
+	// 它与 Blocked 分栏：这是「猜的」，可能误报也可能漏报，绝不算进拦截率。
+	Refused bool `json:"refused,omitempty"`
+
+	// RefuseRule 是触发拒答猜测的规则（命中的短语），未命中时为空。
+	RefuseRule string `json:"refuse_rule,omitempty"`
+
+	// Upstream 是后端返回的错误信息（仅非 200 时填），结构比 msg 更利于统计。
+	Upstream *UpstreamError `json:"upstream,omitempty"`
+
+	// FinishReason 是流式通道最终的结束原因（stop / tool_calls / content_filter…）。
+	FinishReason string `json:"finish,omitempty"`
+
+	// Tools 是本次响应里调用过的工具名，仅用于展示。
+	Tools []string `json:"tools,omitempty"`
+
+	// Request 是请求侧的轻量摘要，不含任何对话内容。
+	Request *RequestSummary `json:"req,omitempty"`
 
 	// Error 记录失败原因，成功时为空。
 	Error string `json:"err,omitempty"`
 
 	// Version 只在启动事件里出现，方便对照「这个问题是哪个版本产生的」。
 	Version string `json:"version,omitempty"`
+}
+
+// UpstreamError 是后端返回的结构化错误（非 200 时从 JSON 体里解出）。
+// 只记 code 与 msg，不记原始错误页，避免把整页 HTML 塞进日志。
+type UpstreamError struct {
+	HTTP int    `json:"http"` // 后端 HTTP 状态码
+	Code int    `json:"code"` // 后端业务码；非 JSON 或缺失时为 0
+	Msg  string `json:"msg"`  // 后端错误文案
+}
+
+// RequestSummary 是请求侧的轻量摘要。
+// 不记消息内容——只记「有几条消息、是否带工具、是否流式」，够排查就够了。
+type RequestSummary struct {
+	Messages   int  `json:"messages"`   // 消息条数
+	HasTools   bool `json:"has_tools"` // 是否带 tools
+	Stream     bool `json:"stream"`     // 是否要求流式
+	MaxTokens  int  `json:"max_tokens,omitempty"`
 }
 
 // Journal 是只追加的事件文件。

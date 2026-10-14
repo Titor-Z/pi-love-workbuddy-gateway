@@ -63,6 +63,12 @@ type streamObserver struct {
 	usage        *usageInfo
 	finishReason string
 	toolNames    []string
+
+	// assistantText 累积助手回复正文（delta.content）。
+	// 仅用于本进程内判断「是否疑似礼貌拒答」，绝不落盘、绝不下发。
+	assistantText string
+	// refusal 保存最近一次非空的结构拒绝标记，供 chat.go 判定。
+	refusal string
 }
 
 // newStreamObserver 包装一个数据源。
@@ -97,9 +103,6 @@ func (o *streamObserver) FinishReason() string {
 	}
 	return o.finishReason
 }
-
-// ToolNames 返回本次响应里调用过的工具名，仅用于展示。
-func (o *streamObserver) ToolNames() []string { return o.toolNames }
 
 // scanLines 把字节流按行切开，逐行交给 SSE 解析。
 func (o *streamObserver) scanLines(chunk []byte) {
@@ -139,6 +142,7 @@ func (o *streamObserver) handleLine(line []byte) {
 				// Refusal 是后端对「拒绝输出这部分内容」的结构标记。
 				// 正常回复里它也会出现，但恒为空串；非空才表示真被拦。
 				Refusal   string `json:"refusal"`
+				Content   string `json:"content"`
 				ToolCalls []struct {
 					Function struct {
 						Name string `json:"name"`
@@ -162,6 +166,10 @@ func (o *streamObserver) handleLine(line []byte) {
 		}
 		if choice.Delta.Refusal != "" {
 			o.blocked = true
+			o.refusal = choice.Delta.Refusal
+		}
+		if content := choice.Delta.Content; content != "" {
+			o.assistantText += content
 		}
 		for _, call := range choice.Delta.ToolCalls {
 			if name := call.Function.Name; name != "" {
@@ -170,3 +178,12 @@ func (o *streamObserver) handleLine(line []byte) {
 		}
 	}
 }
+
+// ToolNames 返回本次响应里调用过的工具名，仅用于展示。
+func (o *streamObserver) ToolNames() []string { return o.toolNames }
+
+// AssistantText 返回已累积的助手回复正文，仅进程内用于判断疑似拒答，不落盘。
+func (o *streamObserver) AssistantText() string { return o.assistantText }
+
+// Refusal 返回最近一次非空的结构拒绝标记；没有则为空串。
+func (o *streamObserver) Refusal() string { return o.refusal }

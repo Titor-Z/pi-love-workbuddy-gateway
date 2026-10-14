@@ -116,9 +116,9 @@
       <div class="sub">{billing ? `${billing.packages.length} 个资源包` : "读取中"}</div>
     </div>
     <div class="stat">
-      <div class="label"><span>拦截率</span></div>
-      <div class="value">{fmt.percent(totals.block_rate)}</div>
-      <div class="sub">{totals.blocked} 次命中内容审核</div>
+      <div class="label"><span>拦截 / 拒答</span></div>
+      <div class="value">{totals.blocked}<small> / {totals.refused}</small></div>
+      <div class="sub">确定拦截 {fmt.percent(totals.block_rate)} · 疑似拒答 {totals.refused} 次</div>
     </div>
   </div>
 </section>
