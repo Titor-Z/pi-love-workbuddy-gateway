@@ -15,9 +15,9 @@ const defaultUsageDays = 14
 
 // usageDay 是「按天」的一个数据点，直接对应柱状图的一根柱子。
 type usageDay struct {
-	Date     string             `json:"date"`     // 形如 2026-10-14
-	Requests int                `json:"requests"` // 当天请求数
-	Credit   float64            `json:"credit"`   // 当天消耗
+	Date     string             `json:"date"`      // 形如 2026-10-14
+	Requests int                `json:"requests"`  // 当天请求数
+	Credit   float64            `json:"credit"`    // 当天消耗
 	Blocked  int                `json:"blocked"`   // 当天确定被内容审核拦下的次数（结构信号或策略码）
 	Refused  int                `json:"refused"`   // 当天疑似礼貌拒答的次数（文本启发式）
 	In       int                `json:"in"`        // 当天输入 token
@@ -44,7 +44,7 @@ type usageTotals struct {
 	Requests  int     `json:"requests"`
 	Credit    float64 `json:"credit"`
 	Blocked   int     `json:"blocked"`    // 确定被拦（含 11128 策略码与 content_filter/refusal）
-	BlockRate float64 `json:"block_rate"`  // 确定被拦数 ÷ 请求数
+	BlockRate float64 `json:"block_rate"` // 确定被拦数 ÷ 请求数
 	Refused   int     `json:"refused"`    // 疑似拒答（启发式，不计入拦截率）
 
 	In     int `json:"in"`

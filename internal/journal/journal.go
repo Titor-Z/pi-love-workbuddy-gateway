@@ -8,6 +8,18 @@
 //   - 追加写入不需要事务，进程被 kill 也不会损坏已有内容。
 //
 // 每条记录都带一个人类可读的 msg 字段，所以直接 tail 也不至于看不懂。
+//
+// 关于「对话正文」的记录契约（重要，v0.2.4 起生效）：
+//   - 只有被判定为「确定拦截」或「疑似拒答」的对话事件，才会写入 request /
+//     response 两个正文字段，用于复盘「到底发了什么被拦」。正常对话一律不存。
+//   - 正文是明文、落在本机文件里，因此另有 30 天 TTL：超过 payloadTTL 的正文
+//     在读取时（ReadSince）会被脱敏为空，不会无限期留存。
+//   - 这是把「能看清 pi↔WorkBuddy 这个黑盒」与「隐私」之间取平衡后的边界，
+//     不要为了调试方便把正文范围扩大到全部对话。
+//
+// 关于「限流」的说明：后端对模型有用量/频率限制，通常以 HTTP 429 回绝。
+// 它不是内容拦截，因此不算入 blocked 判定，只作为普通上游错误记录在
+// upstream{http,code,msg} 里——面板的抽屉能看清是哪次、哪个模型被限流。
 package journal
 
 import (
@@ -88,6 +100,16 @@ type Record struct {
 	// Tools 是本次响应里调用过的工具名，仅用于展示。
 	Tools []string `json:"tools,omitempty"`
 
+	// RequestText 是本次请求的对话正文（messages 序列化）。
+	// 仅当本事件被判定为「确定拦截」或「疑似拒答」时才填充，用于复盘
+	// 「到底发了什么被拦」——正常对话一律不存，守住隐私。
+	// 注意：这是明文文本，落在本机日志文件里。
+	RequestText string `json:"request,omitempty"`
+
+	// ResponseText 是本次响应里助手回复的正文（delta.content 累积）。
+	// 同样只在拦截/拒答时填充；正常回复不存。
+	ResponseText string `json:"response,omitempty"`
+
 	// Request 是请求侧的轻量摘要，不含任何对话内容。
 	Request *RequestSummary `json:"req,omitempty"`
 
@@ -96,6 +118,27 @@ type Record struct {
 
 	// Version 只在启动事件里出现，方便对照「这个问题是哪个版本产生的」。
 	Version string `json:"version,omitempty"`
+}
+
+// payloadTTL 是带对话正文的事件保留时长。超过这个时长的拦截/拒答正文会被
+// 读取时脱敏（置空），避免日志文件无限膨胀、也缩短明文对话落盘的暴露窗口。
+// 正常对话不存正文，不受此限。
+const payloadTTL = 30 * 24 * time.Hour
+
+// RedactPayloads 返回去掉了过期正文的副本。超过 payloadTTL 的对话事件，
+// 其 request/response 正文会被清空（其它统计字段原样保留）。
+// 这是为了在「能复盘被拦内容」与「明文不长期落盘」之间取平衡。
+func (r Record) RedactPayloads(now time.Time) Record {
+	if r.RequestText == "" && r.ResponseText == "" {
+		return r
+	}
+	if now.Sub(r.Time) <= payloadTTL {
+		return r
+	}
+	cloned := r
+	cloned.RequestText = ""
+	cloned.ResponseText = ""
+	return cloned
 }
 
 // UpstreamError 是后端返回的结构化错误（非 200 时从 JSON 体里解出）。
@@ -109,10 +152,10 @@ type UpstreamError struct {
 // RequestSummary 是请求侧的轻量摘要。
 // 不记消息内容——只记「有几条消息、是否带工具、是否流式」，够排查就够了。
 type RequestSummary struct {
-	Messages   int  `json:"messages"`   // 消息条数
-	HasTools   bool `json:"has_tools"` // 是否带 tools
-	Stream     bool `json:"stream"`     // 是否要求流式
-	MaxTokens  int  `json:"max_tokens,omitempty"`
+	Messages  int  `json:"messages"`  // 消息条数
+	HasTools  bool `json:"has_tools"` // 是否带 tools
+	Stream    bool `json:"stream"`    // 是否要求流式
+	MaxTokens int  `json:"max_tokens,omitempty"`
 }
 
 // Journal 是只追加的事件文件。
@@ -209,7 +252,8 @@ func (j *Journal) ReadSince(since time.Time) ([]Record, error) {
 		if !since.IsZero() && record.Time.Before(since) {
 			continue
 		}
-		records = append(records, record)
+		// 过期的对话正文脱敏后再返回，避免明文长期留在读取结果里。
+		records = append(records, record.RedactPayloads(time.Now()))
 	}
 	if err := scanner.Err(); err != nil {
 		return records, fmt.Errorf("读取事件文件失败：%w", err)

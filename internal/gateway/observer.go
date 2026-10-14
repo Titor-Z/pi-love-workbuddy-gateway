@@ -65,8 +65,11 @@ type streamObserver struct {
 	toolNames    []string
 
 	// assistantText 累积助手回复正文（delta.content）。
-	// 仅用于本进程内判断「是否疑似礼貌拒答」，绝不落盘、绝不下发。
+	// 仅用于本进程内判断「是否疑似礼貌拒答」与拼接待复盘正文，绝不落盘时原样保留。
 	assistantText string
+	// responseText 累积可供复盘的正文：content + reasoning_content + refusal。
+	// 仅在事件最终被判定为拦截/拒答时才写入日志，正常对话不存。
+	responseText string
 	// refusal 保存最近一次非空的结构拒绝标记，供 chat.go 判定。
 	refusal string
 }
@@ -143,6 +146,7 @@ func (o *streamObserver) handleLine(line []byte) {
 				// 正常回复里它也会出现，但恒为空串；非空才表示真被拦。
 				Refusal   string `json:"refusal"`
 				Content   string `json:"content"`
+				Reasoning string `json:"reasoning_content"`
 				ToolCalls []struct {
 					Function struct {
 						Name string `json:"name"`
@@ -167,9 +171,14 @@ func (o *streamObserver) handleLine(line []byte) {
 		if choice.Delta.Refusal != "" {
 			o.blocked = true
 			o.refusal = choice.Delta.Refusal
+			o.responseText += choice.Delta.Refusal
 		}
 		if content := choice.Delta.Content; content != "" {
 			o.assistantText += content
+			o.responseText += content
+		}
+		if reasoning := choice.Delta.Reasoning; reasoning != "" {
+			o.responseText += reasoning
 		}
 		for _, call := range choice.Delta.ToolCalls {
 			if name := call.Function.Name; name != "" {
@@ -184,6 +193,10 @@ func (o *streamObserver) ToolNames() []string { return o.toolNames }
 
 // AssistantText 返回已累积的助手回复正文，仅进程内用于判断疑似拒答，不落盘。
 func (o *streamObserver) AssistantText() string { return o.assistantText }
+
+// ResponseText 返回可供复盘的正文（content + reasoning_content + refusal 累积）。
+// 仅当事件最终被判定为拦截/拒答时由 chat.go 决定落盘，正常对话不调用它存盘。
+func (o *streamObserver) ResponseText() string { return o.responseText }
 
 // Refusal 返回最近一次非空的结构拒绝标记；没有则为空串。
 func (o *streamObserver) Refusal() string { return o.refusal }

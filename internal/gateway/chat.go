@@ -73,13 +73,24 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		policyVerdict := blocked.FromPolicy(errBody.Code, errBody.Msg)
 		message := fmt.Sprintf("✗ HTTP %d | %s | %s", resp.StatusCode, modelName, msg)
 		s.logger.Printf("%s", message)
+
+		// 命中策略码（如 11128 安全策略拦截）时留存请求正文，用于复盘
+		// 「到底发了什么被拦」。非策略码的普通错误（限流、模型不存在等）不留正文。
+		reqText := ""
+		if policyVerdict.Blocked {
+			if rawReq, err := json.Marshal(clientBody["messages"]); err == nil {
+				reqText = string(rawReq)
+			}
+		}
+
 		s.recordChat(journal.Record{
 			Kind: journal.KindChat, Model: modelName, Stream: streaming,
 			Status: resp.StatusCode, Millis: time.Since(started).Milliseconds(),
 			Message: message, Error: msg,
 			Blocked: policyVerdict.Blocked, BlockedReason: string(policyVerdict.Reason),
-			Upstream: &journal.UpstreamError{HTTP: resp.StatusCode, Code: errBody.Code, Msg: errBody.Msg},
-			Request: summarizeRequest(clientBody),
+			Upstream:    &journal.UpstreamError{HTTP: resp.StatusCode, Code: errBody.Code, Msg: errBody.Msg},
+			Request:     summarizeRequest(clientBody),
+			RequestText: reqText,
 		})
 		writeUpstreamError(w, resp.StatusCode, raw)
 		return
@@ -148,25 +159,40 @@ func (s *Server) finishChat(modelName string, observer *streamObserver,
 		s.logger.Printf("✗ %s", message)
 	}
 
+	// 仅当本事件被判定为「确定拦截」或「疑似拒答」时，才把收发正文落盘用于复盘。
+	// 正常对话一律不存正文——这是「能看清黑盒」与「隐私」之间取平衡后的边界。
+	// 正文是明文，落在本机日志里，故 journal 侧还有 30 天 TTL 脱敏兜底。
+	var reqText, respText string
+	if verdict.Blocked || verdict.Refused {
+		if clientBody != nil {
+			if raw, err := json.Marshal(clientBody["messages"]); err == nil {
+				reqText = string(raw)
+			}
+		}
+		respText = observer.ResponseText()
+	}
+
 	s.recordChat(journal.Record{
-		Kind:         journal.KindChat,
-		Message:      message,
-		Model:        modelName,
-		Credit:       usage.Credit,
-		In:           usage.Prompt,
-		Out:          usage.Completion,
-		Cached:       usage.Cached(),
-		Millis:       cost.Milliseconds(),
-		Status:       status,
-		Stream:       streaming,
-		Blocked:      verdict.Blocked,
+		Kind:          journal.KindChat,
+		Message:       message,
+		Model:         modelName,
+		Credit:        usage.Credit,
+		In:            usage.Prompt,
+		Out:           usage.Completion,
+		Cached:        usage.Cached(),
+		Millis:        cost.Milliseconds(),
+		Status:        status,
+		Stream:        streaming,
+		Blocked:       verdict.Blocked,
 		BlockedReason: string(verdict.Reason),
-		Refused:      verdict.Refused,
-		RefuseRule:   string(verdict.RefuseRule),
-		FinishReason: observer.FinishReason(),
-		Tools:        observer.ToolNames(),
-		Request:      summarizeRequest(clientBody),
-		Error:        failure,
+		Refused:       verdict.Refused,
+		RefuseRule:    string(verdict.RefuseRule),
+		FinishReason:  observer.FinishReason(),
+		Tools:         observer.ToolNames(),
+		Request:       summarizeRequest(clientBody),
+		RequestText:   reqText,
+		ResponseText:  respText,
+		Error:         failure,
 	})
 }
 

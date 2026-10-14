@@ -246,3 +246,46 @@ func TestEscapeHTMLIsDisabled(t *testing.T) {
 		t.Errorf("HTML 被转义了，文件不好读：%s", string(raw))
 	}
 }
+
+// TestRedactPayloadsExpires 超过 TTL 的对话正文读取时应被脱敏为空，
+// 而其它统计字段必须原样保留（统计不能因为脱敏而失真）。
+func TestRedactPayloadsExpires(t *testing.T) {
+	old := Record{
+		Kind:         KindChat,
+		Time:         time.Now().Add(-31 * 24 * time.Hour),
+		RequestText:  "过期了的请求正文",
+		ResponseText: "过期了的回复正文",
+		Credit:       1.5,
+		In:           100,
+	}
+	got := old.RedactPayloads(time.Now())
+	if got.RequestText != "" || got.ResponseText != "" {
+		t.Errorf("过期正文应被清空，得到 req=%q resp=%q", got.RequestText, got.ResponseText)
+	}
+	if got.Credit != 1.5 || got.In != 100 {
+		t.Error("脱敏不该动到统计字段")
+	}
+}
+
+// TestRedactPayloadsKeepsFresh 未过期的正文必须原样保留，
+// 否则「点开详情看被拦内容」就失效了。
+func TestRedactPayloadsKeepsFresh(t *testing.T) {
+	fresh := Record{
+		Kind:        KindChat,
+		Time:        time.Now().Add(-2 * 24 * time.Hour),
+		RequestText: "今天被拦的请求",
+	}
+	got := fresh.RedactPayloads(time.Now())
+	if got.RequestText != "今天被拦的请求" {
+		t.Errorf("未过期正文应保留，得到 %q", got.RequestText)
+	}
+}
+
+// TestRedactPayloadsSkipsEmpty 没有正文的事件直接原样返回，不做多余拷贝。
+func TestRedactPayloadsSkipsEmpty(t *testing.T) {
+	old := Record{Kind: KindChat, Time: time.Now().Add(-99 * 24 * time.Hour), Credit: 3}
+	got := old.RedactPayloads(time.Now())
+	if got.Credit != 3 || got.RequestText != "" {
+		t.Errorf("无正文事件应原样返回，得到 %+v", got)
+	}
+}

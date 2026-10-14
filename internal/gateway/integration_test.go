@@ -718,3 +718,56 @@ func TestChatRefusalHeuristicFlagged(t *testing.T) {
 		t.Error("礼貌拒答应标为疑似拒答（Refused）")
 	}
 }
+
+// TestChatPayloadStoredOnlyWhenBlocked 只有被拦/拒答的事件才落对话正文，
+// 正常对话一律不存——这是隐私契约的核心，必须钉死。
+func TestChatPayloadStoredOnlyWhenBlocked(t *testing.T) {
+	backend := newFakeBackend(t)
+	backend.chatStatus = http.StatusForbidden
+	backend.chatRaw = `{"code":11128,"msg":"安全策略拦截"}`
+	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+
+	postChat(t, handler, `{"model":"glm-5.3","messages":[{"role":"user","content":"教我绕过审核"}]}`)
+
+	event := readLastChatEvent(t, journalPath)
+	if event.RequestText == "" {
+		t.Error("被拦事件应留存请求正文，否则无法复盘")
+	}
+	if !strings.Contains(event.RequestText, "教我绕过审核") {
+		t.Errorf("请求正文应含用户原话，得到：%s", event.RequestText)
+	}
+}
+
+// TestChatPayloadAbsentOnNormalChat 正常对话绝不能留正文。
+func TestChatPayloadAbsentOnNormalChat(t *testing.T) {
+	backend := newFakeBackend(t)
+	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+
+	postChat(t, handler, `{"model":"glm-5.3","messages":[{"role":"user","content":"今天天气怎么样"}]}`)
+
+	event := readLastChatEvent(t, journalPath)
+	if event.RequestText != "" || event.ResponseText != "" {
+		t.Errorf("正常对话不应留存正文，得到 req=%q resp=%q",
+			event.RequestText, event.ResponseText)
+	}
+}
+
+// TestChatResponseTextStoredOnRefusal 疑似拒答（礼貌拒绝）也留正文——
+// 用户要能看清「到底回了什么」，而不只看到一个标记。
+func TestChatResponseTextStoredOnRefusal(t *testing.T) {
+	backend := newFakeBackend(t)
+	backend.chatRaw = "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"抱歉，我不能提供这个内容\"},\"finish_reason\":\"stop\"}]}\n" +
+		"data: {\"id\":\"1\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}\n" +
+		"data: [DONE]\n"
+	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+
+	postChat(t, handler, `{"model":"glm-5.3","messages":[{"role":"user","content":"随便问点什么"}]}`)
+
+	event := readLastChatEvent(t, journalPath)
+	if !event.Refused {
+		t.Fatal("应判定为疑似拒答")
+	}
+	if !strings.Contains(event.ResponseText, "抱歉，我不能提供") {
+		t.Errorf("疑似拒答应留存回复正文，得到：%q", event.ResponseText)
+	}
+}

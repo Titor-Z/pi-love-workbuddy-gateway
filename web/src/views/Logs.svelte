@@ -1,5 +1,6 @@
 <script>
   import Skeleton from "../lib/Skeleton.svelte";
+  import Drawer from "../lib/Drawer.svelte";
   import { api } from "../lib/api.js";
   import * as fmt from "../lib/format.js";
 
@@ -11,6 +12,7 @@
   let onlyChat = $state(false);
   let view = $state("timeline"); // timeline | detail
   let page = $state(1);
+  let selected = $state(null); // 抽屉当前展示的事件；null 表示关闭
 
   // 每页条数。列表不做内部滚动（外层页面已经是滚动容器，套两层会互相抢滚轮），
   // 所以长列表靠分页。
@@ -172,7 +174,7 @@
           </thead>
           <tbody>
             {#each pagedChats as event, index (index)}
-              <tr>
+              <tr class="row" role="button" tabindex="0" onclick={() => (selected = event)} onkeydown={(e) => e.key === "Enter" && (selected = event)}>
                 <td class="num">{fmt.clock(event.t)}</td>
                 <td class="num">
                   {event.model}
@@ -229,10 +231,20 @@
     {:else}
       <div class="log">
         {#each paged as event, index (index)}
-          <div class="log-row" class:blocked={event.blocked}>
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          <div
+            class="log-row"
+            class:blocked={event.blocked}
+            role="button"
+            tabindex="0"
+            onclick={() => (selected = event)}
+            onkeydown={(e) => e.key === "Enter" && (selected = event)}
+          >
             <span class="t">{fmt.clock(event.t)}</span>
             <span class="kind">{fmt.kindLabel(event.kind)}</span>
             <span>{event.msg || "—"}</span>
+            <span class="peek">详情 ›</span>
           </div>
         {/each}
       </div>
@@ -256,10 +268,34 @@
   {/if}
 </section>
 
+{#if selected}
+  <Drawer event={selected} onClose={() => (selected = null)} />
+{/if}
+
 <style>
   .cache-rate {
     font-size: 10px;
     color: var(--muted);
     margin-left: 4px;
+  }
+
+  /* 明细行可点击：光标提示 + hover 压暗，和按钮 hover 反白是同一种反馈语言。 */
+  .row {
+    cursor: pointer;
+  }
+
+  .row:hover {
+    background: color-mix(in srgb, var(--ink) 6%, transparent);
+  }
+
+  .peek {
+    font-size: 11px;
+    color: var(--muted);
+    opacity: 0;
+    transition: opacity 120ms ease-out;
+  }
+
+  .log-row:hover .peek {
+    opacity: 1;
   }
 </style>

@@ -88,8 +88,8 @@ func TestObserverBlockedSpansChunks(t *testing.T) {
 		name   string
 		chunks []string
 	}{
-		{"finish_reason 跨块", []string{`data: {"choices":[{"delta":{},"finish_rea`, `son":"content_filter"}]}`+"\n"}},
-		{"refusal 跨块", []string{`data: {"choices":[{"delta":{"re`, `fusal":"我无法"}}]}`+"\n"}},
+		{"finish_reason 跨块", []string{`data: {"choices":[{"delta":{},"finish_rea`, `son":"content_filter"}]}` + "\n"}},
+		{"refusal 跨块", []string{`data: {"choices":[{"delta":{"re`, `fusal":"我无法"}}]}` + "\n"}},
 	}
 	for _, testCase := range cases {
 		chunks := make([][]byte, 0, len(testCase.chunks))
