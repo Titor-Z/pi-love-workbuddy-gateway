@@ -5,6 +5,7 @@
   import Models from "./views/Models.svelte";
   import Settings from "./views/Settings.svelte";
   import Logs from "./views/Logs.svelte";
+  import Devices from "./views/Devices.svelte";
   import Status from "./views/Status.svelte";
   import Confirm from "./lib/Confirm.svelte";
   import Logo from "/public/header-logo.png";
@@ -15,6 +16,7 @@
     { id: "overview", label: "总览", component: Overview },
     { id: "models", label: "模型", component: Models },
     { id: "logs", label: "日志", component: Logs },
+    { id: "devices", label: "多设备", component: Devices },
     { id: "settings", label: "设置", component: Settings },
     { id: "status", label: "状态", component: Status },
   ];

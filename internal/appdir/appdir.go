@@ -45,6 +45,10 @@ const DevicesFileName = "devices.json"
 // 它间接持有另一台机器上账号的访问权限，权限要求与 PSK 文件相同。
 const ClientFileName = "client.json"
 
+// RelayPreferenceFileName 记录「是否开放转发服务」这一项偏好。
+// 由面板改写、启动时读取。默认不存在 = 不开启：多设备共享是可选功能。
+const RelayPreferenceFileName = "relay.json"
+
 // RelayCertFileName / RelayKeyFileName 是 relay 端口的自签证书与私钥。
 const RelayCertFileName = "relay-cert.pem"
 const RelayKeyFileName = "relay-key.pem"
@@ -94,6 +98,9 @@ func DevicesPath() string { return join(Dir(), DevicesFileName) }
 
 // ClientPath 返回客户端配对配置文件的路径。
 func ClientPath() string { return join(Dir(), ClientFileName) }
+
+// RelayPreferencePath 返回转发服务偏好文件的路径。
+func RelayPreferencePath() string { return join(Dir(), RelayPreferenceFileName) }
 
 // RelayCertPath 返回 relay 证书文件的路径。
 func RelayCertPath() string { return join(Dir(), RelayCertFileName) }

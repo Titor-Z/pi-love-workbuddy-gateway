@@ -13,6 +13,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/atrest"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/billing"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/config"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
@@ -361,4 +362,64 @@ func TestEventsEndpointLimit(t *testing.T) {
 			t.Errorf("limit=%s 的状态码 = %d，想要 200", raw, recorder.Code)
 		}
 	}
+}
+
+// TestStatusIncludesMode 前端要按模式决定显示哪些区块，
+// 所以 status 必须带上 mode；客户端模式没有凭证时账号摘要留空而不是报错。
+func TestStatusIncludesMode(t *testing.T) {
+	console, _ := newLivePanel(t)
+	console.deps.Mode = config.ModeGateway
+	payload := readStatus(t, console)
+	if payload["mode"] != config.ModeGateway {
+		t.Errorf("mode = %v，期望 %q", payload["mode"], config.ModeGateway)
+	}
+
+	// 客户端模式：没有凭证管理器，account 必须是 null 而不是读取失败。
+	console.deps.Mode = config.ModeClient
+	console.deps.Credential = nil
+	payload = readStatus(t, console)
+	if payload["account"] != nil {
+		t.Errorf("客户端模式的 account 应当为空，实际 %v", payload["account"])
+	}
+	if payload["mode"] != config.ModeClient {
+		t.Errorf("mode = %v", payload["mode"])
+	}
+}
+
+// TestBillingAndModelsReportUnavailableInClientMode 客户端模式没有凭证，
+// 余额与模型目录都属于网关那一侧。这里必须给出明确的原因，
+// 而不是一个「读取失败」——那会被误读成网络问题。
+func TestBillingAndModelsReportUnavailableInClientMode(t *testing.T) {
+	console, _ := newLivePanel(t)
+	console.deps.Credential = nil
+	console.deps.Billing = nil
+	console.deps.Upstream = nil
+
+	for _, path := range []string{"/api/billing", "/api/models", "/api/models/pi"} {
+		recorder := call(t, console, http.MethodGet, path, nil, nil)
+		if recorder.Code != http.StatusNotImplemented {
+			t.Errorf("%s 状态码 = %d，期望 501", path, recorder.Code)
+		}
+		if !strings.Contains(recorder.Body.String(), "not_configured") {
+			t.Errorf("%s 的错误类型不对：%s", path, recorder.Body.String())
+		}
+	}
+	// 余额那条要明确说「属于网关那一侧」，否则用户会去查自己的网络。
+	billingRecorder := call(t, console, http.MethodGet, "/api/billing", nil, nil)
+	if !strings.Contains(billingRecorder.Body.String(), "客户端模式") {
+		t.Errorf("余额错误没有说明是模式问题：%s", billingRecorder.Body.String())
+	}
+}
+
+func readStatus(t *testing.T, console *Panel) map[string]any {
+	t.Helper()
+	recorder := call(t, console, http.MethodGet, "/api/status", nil, nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d，期望 200", recorder.Code)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("响应不是 JSON：%v", err)
+	}
+	return payload
 }

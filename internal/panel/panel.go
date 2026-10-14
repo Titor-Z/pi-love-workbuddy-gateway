@@ -129,6 +129,13 @@ func (p *Panel) Handler() http.Handler {
 	mux.HandleFunc("GET /api/promotions", p.guarded(p.handleGetPromotions))
 	mux.HandleFunc("PUT /api/promotions", p.guarded(p.handlePutPromotions))
 
+	// 转发服务与设备管理。只在网关模式下有意义，客户端模式一律 501。
+	mux.HandleFunc("GET /api/relay", p.guarded(p.handleRelay))
+	mux.HandleFunc("POST /api/relay/psk", p.guarded(p.handleResetPSK))
+	mux.HandleFunc("POST /api/relay/enable", p.guarded(p.handleEnableRelay))
+	mux.HandleFunc("POST /api/devices/revoke", p.guarded(p.handleRevokeDevice))
+	mux.HandleFunc("POST /api/devices/unrevoke", p.guarded(p.handleUnrevokeDevice))
+
 	mux.HandleFunc("POST /api/control/stop", p.guarded(p.handleStop))
 	mux.HandleFunc("POST /api/control/restart", p.guarded(p.handleRestart))
 

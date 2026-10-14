@@ -24,21 +24,26 @@ type statusResponse struct {
 	LogPath        string         `json:"log_path"`
 	JournalPath    string         `json:"journal_path"`
 	PromotionsPath string         `json:"promotions_path"`
+	Mode           string         `json:"mode"`
 	Account        map[string]any `json:"account"`
 }
 
 // handleStatus 返回网关自身的状态与账号摘要。
+//
+// 客户端模式没有凭证（Credential 为 nil），此时 account 留空而不是硬读——
+// 一个「读取失败」在这里等于骗人：本来就没有东西可读。
 func (p *Panel) handleStatus(w http.ResponseWriter, _ *http.Request) {
-	account := p.deps.Credential.Summary()
-	delete(account, "error") // 账号读不出来时不要在面板上暴露内部错误文本
-	if _, ok := account["error"]; !ok {
-		// 保留原样
+	var account map[string]any
+	if p.deps.Credential != nil {
+		account = p.deps.Credential.Summary()
+		delete(account, "error") // 账号读不出来时不要在面板上暴露内部错误文本
 	}
 	writeJSON(w, http.StatusOK, statusResponse{
 		Version:        p.deps.Version,
 		StartedAt:      p.deps.StartedAt,
 		UptimeSeconds:  int64(time.Since(p.deps.StartedAt).Seconds()),
 		PID:            os.Getpid(),
+		Mode:           p.deps.Mode,
 		ListenAddr:     p.deps.ListenAddr,
 		ConsoleAddr:    p.deps.ConsoleAddr,
 		AuthFile:       p.deps.AuthFile,
@@ -72,6 +77,12 @@ type billingResponse struct {
 // handleBilling 读取资源包余额。面板不做缓存：账单接口本身有分钟级延迟，
 // 再叠一层缓存只会让数字更难解释。
 func (p *Panel) handleBilling(w http.ResponseWriter, r *http.Request) {
+	if p.deps.Billing == nil {
+		// 客户端模式不持有凭证，余额属于网关那一侧（后续版本会经转发拉取）。
+		writeError(w, http.StatusNotImplemented, "not_configured",
+			"客户端模式不读取 WorkBuddy 余额，请到网关的控制台查看")
+		return
+	}
 	snapshot, err := p.deps.Billing.Fetch(r.Context())
 	if err != nil {
 		p.fail(w, "读取余额", err)
@@ -121,6 +132,10 @@ type modelEntry struct {
 
 // handleModels 返回实时模型目录，带费用标记。
 func (p *Panel) handleModels(w http.ResponseWriter, r *http.Request) {
+	if p.deps.Upstream == nil {
+		writeError(w, http.StatusNotImplemented, "not_configured", "当前模式没有可用的后端")
+		return
+	}
 	models, err := p.deps.Upstream.Models(r.Context())
 	if err != nil {
 		p.fail(w, "拉取模型目录", err)
@@ -150,6 +165,10 @@ func (p *Panel) handleModels(w http.ResponseWriter, r *http.Request) {
 
 // handlePiModels 直接输出可落盘的 pi 配置，供面板上的「下载」按钮使用。
 func (p *Panel) handlePiModels(w http.ResponseWriter, r *http.Request) {
+	if p.deps.Upstream == nil {
+		writeError(w, http.StatusNotImplemented, "not_configured", "当前模式没有可用的后端")
+		return
+	}
 	models, err := p.deps.Upstream.Models(r.Context())
 	if err != nil {
 		p.fail(w, "生成 pi 配置", err)

@@ -240,6 +240,29 @@ pre,
   font-family: var(--font-mono);
 }
 
+/* 面板里要用户照着抄的字符串（密钥、指纹）用等宽 + 允许换行：
+   抄不下来的提示等于没有提示。 */
+code.copyable {
+  font-size: 12px;
+  word-break: break-all;
+  background: var(--surface);
+  border: 2px solid var(--rule);
+  padding: 2px 6px;
+  display: inline-block;
+}
+
+/* 次要说明：次级文字色，不用 opacity（design.md：弱化不用透明度）。 */
+.dim {
+  color: var(--muted);
+}
+
+/* 一行操作按钮：靠间距分组，不画线（design.md 通则一）。 */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
 pre {
   background: var(--surface);
   border: 3px solid var(--rule);
@@ -654,6 +677,14 @@ th.num {
   color: var(--invert-fg);
 }
 
+/* 可用：绿底反白。与 free 同色——两者都是「没问题」，
+   用同一个颜色不引入新语义。 */
+.tag.ok {
+  background: var(--ok);
+  color: var(--paper);
+  border-color: var(--ok);
+}
+
 /* 限流：跟 blocked（红）和 promo（橙）都不是一回事——它不是内容问题，
    是排队问题。用中性色 + 虚线边框，视觉上就该排在另两类后面。 */
 .tag.rate {
@@ -726,6 +757,14 @@ button.action:disabled {
 button.action.danger {
   border-color: var(--error);
   color: var(--error);
+}
+
+/* 主按钮：反白块。这是本系统里唯一的实色填充动作，
+   一屏只该有一个（design.md 第九节：反白块是唯一的强调手段）。 */
+button.action.primary {
+  background: var(--ink);
+  color: var(--paper);
+  border-color: var(--ink);
 }
 
 textarea {
