@@ -7,6 +7,7 @@
   import Logs from "./views/Logs.svelte";
   import Status from "./views/Status.svelte";
   import Confirm from "./lib/Confirm.svelte";
+  import Logo from "/public/header-logo.png";
 
   // 路由用 hash：单二进制里的静态页不好做服务端路由，
   // 而 hash 刷新、分享、前后退都能正常工作。
@@ -99,10 +100,12 @@
   <a class="skip" href="#main">跳到正文</a>
 
   <header class="topbar">
+    <!-- 顶部 导航栏 Begin.-->
     <div class="brand">
-      WorkBuddy
+      <!-- WorkBuddy -->
+      <img width="100px" src="{Logo}">
       {#if version}<span class="ver">{version}</span>{/if}
-    </div>
+    </div> <!-- 顶部 导航栏 End.  -->
 
     <nav class="nav">
       {#each ROUTES as item (item.id)}
