@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -17,6 +18,13 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/wbapi"
 )
+
+// maxErrorBody 是读取后端错误响应体的上限，避免异常响应撑爆内存。
+// 与 gateway 包里同名常量的取值保持一致：两边读的是同一种错误响应。
+const maxErrorBody = 64 << 10
+
+// errorTextLimit 是拼进错误信息的响应体长度上限。
+const errorTextLimit = 300
 
 // metaTimeout 是拉取模型目录等元信息接口的超时时间。
 const metaTimeout = 30 * time.Second
@@ -30,6 +38,7 @@ var nonChatTags = map[string]bool{
 }
 
 // Client 是后端客户端。对话接口用于流式透传，因此不设整体超时，由调用方的 ctx 控制。
+// 401 重试只发生一次，重试路径见 ChatStream。
 type Client struct {
 	streamHTTP *http.Client
 	metaHTTP   *http.Client
@@ -53,18 +62,85 @@ func NewClient(cred *credential.Manager, baseURL string) *Client {
 
 // ChatStream 发起对话补全请求，返回尚未读取的原始响应。
 // 由调用方决定是原样透传给客户端，还是聚合成非流式响应。
+//
+// 收到 401 时会重新读取登录态再试一次，用来兜住与桌面端同时刷新令牌造成的
+// 竞态；其它状态码原样返回。重试**只有一次**：若重取令牌后依然 401，
+// 说明是真的失效，再重试只会变成对后端的无效轰炸。
 func (c *Client) ChatStream(ctx context.Context, body []byte) (*http.Response, error) {
+	resp, token, err := c.chatStreamOnce(ctx, body)
+	if err != nil || resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		return resp, err
+	}
+	// 401 的响应体可能是 JSON 错误，读掉它再关，避免连接泄漏。
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBody))
+	_ = resp.Body.Close()
+
+	retried, err := c.retryUnauthorized(ctx, body, token)
+	if err != nil {
+		return nil, err
+	}
+	return retried, nil
+}
+
+// chatStreamOnce 发一次请求，同时返回本次使用的访问令牌，供 401 后比对。
+func (c *Client) chatStreamOnce(ctx context.Context, body []byte) (*http.Response, string, error) {
 	headers, err := c.cred.Headers()
+	if err != nil {
+		return nil, "", err
+	}
+	token := bearerToken(headers)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		c.baseURL+wbapi.ChatPath, bytes.NewReader(body))
+	if err != nil {
+		return nil, "", fmt.Errorf("构造补全请求失败：%w", err)
+	}
+	applyHeaders(req, headers)
+	resp, err := c.streamHTTP.Do(req)
+	return resp, token, err
+}
+
+// retryUnauthorized 在 401 之后重新取请求头并重发一次请求体。
+// ctx 未取消、且后端确实换了一枚新令牌时才真正重发。
+func (c *Client) retryUnauthorized(ctx context.Context, body []byte, previousToken string) (*http.Response, error) {
+	if ctx.Err() != nil {
+		// 客户端已经走了，重发没有意义。
+		return nil, fmt.Errorf("请求已取消：%w", ctx.Err())
+	}
+	headers, err := c.cred.RetryAfterUnauthorized(previousToken)
 	if err != nil {
 		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		c.baseURL+wbapi.ChatPath, bytes.NewReader(body))
 	if err != nil {
-		return nil, fmt.Errorf("构造补全请求失败：%w", err)
+		return nil, fmt.Errorf("构造重试请求失败：%w", err)
 	}
 	applyHeaders(req, headers)
-	return c.streamHTTP.Do(req)
+	resp, err := c.streamHTTP.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode == http.StatusUnauthorized {
+		// 重取令牌后依然 401，如实报出，不再重试。
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+		_ = resp.Body.Close()
+		return nil, fmt.Errorf("%w（HTTP 401）：%s",
+				credential.ErrUnauthorized, truncate(string(raw), errorTextLimit))
+	}
+	return resp, nil
+}
+
+// bearerToken 从请求头里取出访问令牌本体，去掉 "Bearer " 前缀。
+func bearerToken(headers map[string]string) string {
+	return strings.TrimPrefix(headers["Authorization"], "Bearer ")
+}
+
+// truncate 截断响应体文本，避免把一整个 HTML 错误页塞进日志。
+func truncate(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	return text[:limit] + "…"
 }
 
 // ModelInfo 是模型目录里我们关心的字段。

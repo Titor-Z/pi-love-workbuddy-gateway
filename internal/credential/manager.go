@@ -27,6 +27,11 @@ type Reporter func(format string, args ...any)
 
 // Manager 持有登录态文件，对外提供「始终有效」的后端请求头。
 // 令牌临近过期时会自动刷新并原子回写文件，供 WorkBuddy 客户端继续复用。
+//
+// 网关与 WorkBuddy 桌面端共用同一份登录态，而桌面端刷新令牌时会轮换
+// refreshToken，网关若继续持旧令牌请求，可能被后端判定为凭据冲突。
+// 因此每次取请求头前都会重新 stat 文件，内容变了就重新载入；
+// 若载入后发现令牌已不在有效区间，则用文件里的新令牌，而不是自己的旧副本。
 type Manager struct {
 	path   string         // 登录态文件路径
 	cipher *atrest.Cipher // 字段级加解密器
@@ -54,6 +59,10 @@ func NewManager(path string, cipher *atrest.Cipher, report Reporter, baseURL str
 	}
 }
 
+// ErrUnauthorized 表示后端以 401 拒绝了请求：令牌已被轮换或吊销。
+// 调用方（upstream）捕获它时应重新取一次请求头再重试，只重试一次。
+var ErrUnauthorized = errors.New("后端返回 401，访问令牌可能已被轮换")
+
 // Path 返回登录态文件路径，供日志展示。
 func (m *Manager) Path() string { return m.path }
 
@@ -66,6 +75,43 @@ func (m *Manager) Headers() (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	return m.headersLocked(doc)
+}
+
+// RetryAfterUnauthorized 在一次 401 之后重新取请求头。
+//
+// 网关与 WorkBuddy 桌面端共用同一份登录态，桌面端刷新令牌时会轮换
+// refreshToken。存在这样一个竞态：网关在桌面端轮换的**同一瞬间**发出请求，
+// 带上的是刚被作废的令牌，后端回 401。此时文件里已经是新令牌，
+// 重新取一次请求头即可恢复，不需要用户干预。
+//
+// 这里强制丢弃内存缓存重新读文件：万一桌面端改写文件的 mtime 与
+// 上一次相同（同秒内写入），仅靠 mtime 比对会认不出变化。
+// 若新取到的令牌与刚才那枚相同，说明不是竞态而是真的失效，直接报错，
+// 避免调用方无限重试。
+func (m *Manager) RetryAfterUnauthorized(previousToken string) (map[string]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.doc = nil
+	m.mtime = time.Time{}
+	doc, err := m.loadLocked()
+	if err != nil {
+		return nil, err
+	}
+	headers, err := m.headersLocked(doc)
+	if err != nil {
+		return nil, err
+	}
+	if headers["Authorization"] == "Bearer "+previousToken {
+		return nil, fmt.Errorf("%w：重新载入登录态后令牌未变化，可能已失效，"+
+			"请打开 WorkBuddy 桌面端确认登录状态", ErrUnauthorized)
+	}
+	return headers, nil
+}
+
+// headersLocked 取文档里的访问令牌并组装请求头；过期则先刷新。调用方须已持锁。
+func (m *Manager) headersLocked(doc map[string]any) (map[string]string, error) {
 	if isExpired(doc, time.Now()) {
 		if err := m.refreshLocked(doc); err != nil {
 			return nil, err
@@ -101,10 +147,16 @@ func (m *Manager) Summary() map[string]any {
 }
 
 // loadLocked 读取登录态文档，并在文件被外部改动时重新载入。调用方须已持锁。
+//
+// 文件被外部（WorkBuddy 桌面端）改写是常态：桌面端也会刷新令牌并轮换
+// refreshToken。若沿用内存里的旧文档继续请求，后端看到的是一枚已被轮换掉的
+// 令牌，可能判定为凭据冲突甚至强制下线。所以这里以文件为准，而不是以缓存为准。
 func (m *Manager) loadLocked() (map[string]any, error) {
 	info, err := os.Stat(m.path)
 	if err != nil {
 		if m.doc != nil {
+			// 文件暂时读不到（权限抖动、被杀毒软件锁住等）时退回缓存，
+			// 不让一次瞬时故障把整个网关打停。
 			return m.doc, nil
 		}
 		return nil, fmt.Errorf("读取登录态文件失败：%w", err)
@@ -114,15 +166,58 @@ func (m *Manager) loadLocked() (map[string]any, error) {
 	}
 	raw, err := os.ReadFile(m.path)
 	if err != nil {
+		if m.doc != nil {
+			return m.doc, nil
+		}
 		return nil, fmt.Errorf("读取登录态文件失败：%w", err)
 	}
 	var doc map[string]any
 	if err := json.Unmarshal(raw, &doc); err != nil {
+		// 文件被写坏的窗口期同样退回缓存；解析不出东西时才报错。
+		if m.doc != nil {
+			return m.doc, nil
+		}
 		return nil, fmt.Errorf("登录态文件不是合法 JSON：%w", err)
+	}
+	if m.doc == nil || !sameToken(m.doc, doc) {
+		m.reportf("检测到登录态文件变化，已重新载入")
 	}
 	m.doc = doc
 	m.mtime = info.ModTime()
 	return doc, nil
+}
+
+// sameToken 判断两份登录态文档的访问令牌是否相同。用于识别
+// 「文件变了但令牌没变」（例如桌面端只更新了别的字段）与
+// 「令牌被轮换了」这两种情况，避免每次 stat 都报一条噪音日志。
+//
+// 令牌可能是密文信封，也可能是明文；两种形态必须能区分开，
+// 否则「桌面端把明文令牌换成了信封」会被误判成没变。
+func sameToken(old, fresh map[string]any) bool {
+	if old == nil || fresh == nil {
+		return false
+	}
+	left, right := authSection(old)["accessToken"], authSection(fresh)["accessToken"]
+	if atrest.IsEncrypted(left) != atrest.IsEncrypted(right) {
+		return false
+	}
+	if !atrest.IsEncrypted(left) {
+		// 明文形态直接按字符串比。
+		leftText, _ := left.(string)
+		rightText, _ := right.(string)
+		return leftText == rightText
+	}
+	return envelopeOf(left) == envelopeOf(right)
+}
+
+// envelopeOf 取出加密信封里的 envelope 字段；不是信封时返回空串。
+func envelopeOf(value any) string {
+	if obj, ok := value.(map[string]any); ok {
+		if envelope, ok := obj["envelope"].(string); ok {
+			return envelope
+		}
+	}
+	return ""
 }
 
 // refreshLocked 调用后端刷新访问令牌，并把结果回写登录态文件。调用方须已持锁。
