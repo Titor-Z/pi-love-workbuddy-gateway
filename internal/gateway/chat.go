@@ -54,7 +54,17 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := s.up.ChatStream(r.Context(), upstreamBody)
 	if err != nil {
-		s.logger.Printf("✗ 后端请求失败 | %s | %v", modelName, err)
+		message := fmt.Sprintf("✗ 后端请求失败 | %s | %v", modelName, err)
+		s.logger.Printf("%s", message)
+		// 网络失败以前是直接 return、一条事件都不记——那种情况下面板里
+		// 什么都看不到，用户只感觉到"没反应"。现在同样记一条，并留存请求正文，
+		// 让抽屉能回答「我刚才发了什么、为什么没动静」。
+		s.recordChat(journal.Record{
+			Kind: journal.KindChat, Model: modelName, Stream: streaming,
+			Status: http.StatusBadGateway, Millis: time.Since(started).Milliseconds(),
+			Message: message, Error: err.Error(),
+			Request: summarizeRequest(clientBody), RequestText: requestPayload(clientBody),
+		})
 		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
 	}
@@ -76,14 +86,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		message := fmt.Sprintf("✗ HTTP %d | %s | %s", resp.StatusCode, modelName, msg)
 		s.logger.Printf("%s", message)
 
-		// 命中策略码（如 11128 安全策略拦截）时留存请求正文，用于复盘
-		// 「到底发了什么被拦」。非策略码的普通错误（限流、模型不存在等）不留正文。
-		reqText := ""
-		if policyVerdict.Blocked {
-			if rawReq, err := json.Marshal(clientBody["messages"]); err == nil {
-				reqText = string(rawReq)
-			}
-		}
+		// 异常一律留存请求正文。这里放宽到「所有非 200」而不是「仅策略码」：
+		// 用户要的是「到底发了什么才出问题」，限流、模型不存在、参数错误同样需要复盘。
+		// 仍然只针对**失败**请求——正常对话一律不存。
+		reqText := requestPayload(clientBody)
 
 		s.recordChat(journal.Record{
 			Kind: journal.KindChat, Model: modelName, Stream: streaming,
@@ -112,7 +118,8 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		s.recordChat(journal.Record{
 			Kind: journal.KindChat, Model: modelName,
 			Status: http.StatusBadGateway, Millis: time.Since(started).Milliseconds(),
-			Message: message, Error: err.Error(), Request: summarizeRequest(clientBody),
+			Message: message, Error: err.Error(),
+			Request: summarizeRequest(clientBody), RequestText: requestPayload(clientBody),
 		})
 		writeError(w, http.StatusBadGateway, "upstream_error", err.Error())
 		return
@@ -165,13 +172,10 @@ func (s *Server) finishChat(modelName string, observer *streamObserver,
 	// 仅当本事件被判定为「确定拦截」或「疑似拒答」时，才把收发正文落盘用于复盘。
 	// 正常对话一律不存正文——这是「能看清黑盒」与「隐私」之间取平衡后的边界。
 	// 正文是明文，落在本机日志里，故 journal 侧还有 30 天 TTL 脱敏兜底。
+	// 失败路径（failure 非空）也留正文：那次请求同样需要复盘。
 	var reqText, respText string
-	if verdict.Blocked || verdict.Refused {
-		if clientBody != nil {
-			if raw, err := json.Marshal(clientBody["messages"]); err == nil {
-				reqText = string(raw)
-			}
-		}
+	if verdict.Blocked || verdict.Refused || failure != "" {
+		reqText = requestPayload(clientBody)
 		respText = observer.ResponseText()
 	}
 
@@ -197,6 +201,23 @@ func (s *Server) finishChat(modelName string, observer *streamObserver,
 		ResponseText:  respText,
 		Error:         failure,
 	})
+}
+
+// requestPayload 序列化请求里的 messages，用于失败时在抽屉里复盘「发了什么」。
+// 只在失败/被拦的路径调用；正常对话不调用它，因此不会把正文写进日志。
+func requestPayload(clientBody map[string]any) string {
+	if clientBody == nil {
+		return ""
+	}
+	messages, ok := clientBody["messages"]
+	if !ok {
+		return ""
+	}
+	raw, err := json.Marshal(messages)
+	if err != nil {
+		return ""
+	}
+	return string(raw)
 }
 
 // summarizeRequest 从客户端请求体里取出轻量摘要，不含任何对话内容。

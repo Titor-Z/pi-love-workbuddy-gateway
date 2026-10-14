@@ -50,6 +50,10 @@
   const today = $derived(usage?.days?.at(-1) ?? null);
   const totals = $derived(usage?.totals ?? { requests: 0, credit: 0, blocked: 0, block_rate: 0 });
 
+  // 当前仍可能生效的限流。后端给出恢复时间才算，解析不出就不显示——
+  // 宁可少说一句，也不要告诉用户一个错的恢复时间。
+  const limits = $derived(usage?.totals?.active_limits ?? []);
+
   // 堆叠柱状图：x 轴是日期，每个模型一条数据集。
   const chartData = $derived.by(() => {
     if (!usage) return { labels: [], datasets: [] };
@@ -121,6 +125,20 @@
       <div class="sub">确定拦截 {fmt.percent(totals.block_rate)} · 疑似拒答 {totals.refused} 次</div>
     </div>
   </div>
+
+  {#if limits.length > 0}
+    <div class="notice warn limits">
+      <strong>有模型正在频率限制中</strong>（{limits.length} 个）：
+      <ul>
+        {#each limits as limit (limit.model)}
+          <li>
+            <code>{limit.model}</code> 预计 <strong>{limit.reset_at}</strong> 恢复
+            <span class="hint">（{limit.since} 撞墙；也可以换其他模型继续用）</span>
+          </li>
+        {/each}
+      </ul>
+    </div>
+  {/if}
 </section>
 
 <section class="section">

@@ -833,6 +833,22 @@ textarea {
   font-size: 12px;
 }
 
+/* 限流提示：它不是错误，是排队。用警示色但不用红色——
+   红色留给内容拦截那种「真出事了」的场景。 */
+.notice.limits ul {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.notice.limits li {
+  margin: 4px 0;
+  line-height: 1.6;
+}
+
+.notice.limits code {
+  font-family: var(--font-mono);
+}
+
 /* ── 图表 ─────────────────────────────────────────────── */
 
 .chart-box {

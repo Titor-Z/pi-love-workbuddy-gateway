@@ -795,8 +795,10 @@ func TestChatRateLimitRecorded(t *testing.T) {
 	if event.Upstream == nil || event.Upstream.Code != 6004 {
 		t.Errorf("upstream 应记录 code 6004，得到 %+v", event.Upstream)
 	}
-	if event.RequestText != "" {
-		t.Error("限流不该留存请求正文——它不是内容拦截")
+	// 限流也留正文：用户要的是「到底发了什么才出问题」，
+	// 限流同样需要复盘。但它仍然不算内容拦截（上面已断言 Blocked=false）。
+	if event.RequestText == "" {
+		t.Error("限流也应留存请求正文，否则抽屉里看不到发了什么")
 	}
 }
 
@@ -815,5 +817,66 @@ func TestChatRateLimitWithoutResetTime(t *testing.T) {
 	}
 	if event.RateResetAt != "" {
 		t.Errorf("取不到时间时应留空而不是猜一个，得到 %q", event.RateResetAt)
+	}
+}
+
+// TestChatNetworkFailureRecorded 后端请求失败以前是一条事件都不记的——
+// 面板里什么都看不到，用户只感觉到"没反应"。现在必须记，且带请求正文。
+func TestChatNetworkFailureRecorded(t *testing.T) {
+	backend := newFakeBackend(t)
+	// 起一个立即关闭连接的假后端，模拟网络失败。
+	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+	backend.server.Close() // 关掉监听，让连接直接失败
+
+	recorder := postChat(t, handler, `{"model":"hy3","messages":[{"role":"user","content":"这条必须被记下来"}]}`)
+
+	if recorder.Code == http.StatusOK {
+		t.Error("连接失败不该返回 200")
+	}
+	event := readLastChatEvent(t, journalPath)
+	if event.RequestText == "" {
+		t.Error("网络失败也应留存请求正文，否则抽屉里看不到发了什么")
+	}
+	if !strings.Contains(event.RequestText, "这条必须被记下来") {
+		t.Errorf("请求正文应含用户原话，得到 %q", event.RequestText)
+	}
+	if event.Error == "" {
+		t.Error("应记录失败原因")
+	}
+}
+
+// TestChatNonPolicyErrorKeepsPayload 普通上游错误（模型不存在等）也要留正文。
+func TestChatNonPolicyErrorKeepsPayload(t *testing.T) {
+	backend := newFakeBackend(t)
+	backend.chatStatus = http.StatusBadRequest
+	backend.chatRaw = `{"code":40001,"msg":"模型不存在"}`
+	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+
+	postChat(t, handler, `{"model":"no-such-model","messages":[{"role":"user","content":"测试模型不存在"}]}`)
+
+	event := readLastChatEvent(t, journalPath)
+	if event.Blocked {
+		t.Error("普通错误不算内容拦截")
+	}
+	if event.RequestText == "" {
+		t.Error("普通错误也应留正文，否则抽屉里看不到发了什么")
+	}
+}
+
+// TestChatAggregateFailureKeepsPayload 聚合失败也要留正文。
+func TestChatAggregateFailureKeepsPayload(t *testing.T) {
+	backend := newFakeBackend(t)
+	// 返回 200 但单行超过 sseScanLimit，让 scanner 报错、聚合失败。
+	backend.chatRaw = "data: " + strings.Repeat("x", (1<<20)+10) + "\n"
+	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+
+	postChat(t, handler, `{"model":"hy3","messages":[{"role":"user","content":"聚合失败也要能复盘"}]}`)
+
+	event := readLastChatEvent(t, journalPath)
+	if event.RequestText == "" {
+		t.Error("聚合失败也应留请求正文")
+	}
+	if !strings.Contains(event.RequestText, "聚合失败也要能复盘") {
+		t.Errorf("请求正文应含用户原话，得到 %q", event.RequestText)
 	}
 }

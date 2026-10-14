@@ -97,8 +97,8 @@
             </div>
             <div><dt>结束原因</dt><dd>{event.finish || "—"}</dd></div>
           </dl>
-          {#if !event.blocked && !event.refused}
-            <p class="note">这次既没被确定拦截，也没触发拒答猜测，是正常的对话——按设计不记录收发正文。</p>
+          {#if !hasPayload && !event.blocked && !event.refused}
+            <p class="note">这次是正常的对话，请求成功、也没被拦——按设计不记录收发正文，只看得到用量。</p>
           {/if}
         </section>
 
@@ -112,7 +112,7 @@
           </dl>
           {#if event.request}
             <button class="disclosure" onclick={() => (showRequest = !showRequest)}>
-              {showRequest ? "▾" : "▸"} 请求正文（被拦/拒答才留存）
+              {showRequest ? "▾" : "▸"} 请求正文（失败/被拦才留存）
             </button>
             {#if showRequest}
               <pre class="payload">{event.request}</pre>
@@ -133,7 +133,7 @@
           </dl>
           {#if event.response}
             <button class="disclosure" onclick={() => (showResponse = !showResponse)}>
-              {showResponse ? "▾" : "▸"} 回复正文（被拦/拒答才留存）
+              {showResponse ? "▾" : "▸"} 回复正文（失败/被拦才留存）
             </button>
             {#if showResponse}
               <pre class="payload">{event.response}</pre>

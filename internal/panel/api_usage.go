@@ -46,6 +46,11 @@ type usageTotals struct {
 	Blocked   int     `json:"blocked"`    // 确定被拦（含 11128 策略码与 content_filter/refusal）
 	BlockRate float64 `json:"block_rate"` // 确定被拦数 ÷ 请求数
 	Refused   int     `json:"refused"`    // 疑似拒答（启发式，不计入拦截率）
+	// RateLimited 是窗口内被频率限制挡下的次数。
+	RateLimited int `json:"rate_limited"`
+	// ActiveLimits 是当前仍可能生效的限流（按模型去重，取最近一条）。
+	// 这是概览页「还要等多久」的数据源；没有则为空。
+	ActiveLimits []activeLimit `json:"active_limits,omitempty"`
 
 	In     int `json:"in"`
 	Out    int `json:"out"`
@@ -53,6 +58,13 @@ type usageTotals struct {
 	// CacheRate 是命中缓存的输入占全部输入的比例。
 	// 它回答「为什么这次的 credit 比上次高」——同样的对话，命中率掉下来就贵。
 	CacheRate float64 `json:"cache_rate"`
+}
+
+// activeLimit 是一个模型当前可能仍生效的限流。
+type activeLimit struct {
+	Model   string `json:"model"`
+	ResetAt string `json:"reset_at"` // 后端原文，如 "2026-10-14 23:13:09 UTC+8"
+	Since   string `json:"since"`    // 最近一次撞墙的时间，便于判断新旧
 }
 
 // usageResponse 是用量页的数据。
@@ -177,7 +189,12 @@ func aggregate(records []journal.Record, from, to time.Time, days int) usageResp
 		if record.Refused {
 			response.Totals.Refused++
 		}
+		if record.RateLimited {
+			response.Totals.RateLimited++
+		}
 	}
+
+	response.Totals.ActiveLimits = collectActiveLimits(records, time.Now())
 
 	response.Models = make([]usageModel, 0, len(byModel))
 	for _, entry := range byModel {
@@ -208,6 +225,48 @@ func aggregate(records []journal.Record, from, to time.Time, days int) usageResp
 			float64(response.Totals.Cached) / float64(response.Totals.In))
 	}
 	return response
+}
+
+// collectActiveLimits 从事件里挑出「可能仍然生效」的限流，按模型去重取最近一条。
+//
+// 判定依据是后端给出的重置时间：解析不出时间的事件一律不纳入——
+// 宁可显示为空，也不要告诉用户一个错的恢复时间。
+// 这是概览页「还要等多久」的唯一数据源。
+func collectActiveLimits(records []journal.Record, now time.Time) []activeLimit {
+	latest := map[string]journal.Record{}
+	for _, record := range records {
+		if !record.RateLimited || record.Model == "" {
+			continue
+		}
+		if existing, ok := latest[record.Model]; !ok || record.Time.After(existing.Time) {
+			latest[record.Model] = record
+		}
+	}
+	if len(latest) == 0 {
+		return nil
+	}
+
+	limits := make([]activeLimit, 0, len(latest))
+	for model, record := range latest {
+		if record.RateResetAt == "" {
+			continue // 解析不出恢复时间，宁可少显示也不要显示错的
+		}
+		if resetTime, err := time.Parse("2006-01-02 15:04:05 MST", record.RateResetAt); err == nil {
+			if resetTime.Before(now) {
+				continue // 已经过了恢复时间，不算「仍然生效」
+			}
+		}
+		limits = append(limits, activeLimit{
+			Model:   model,
+			ResetAt: record.RateResetAt,
+			Since:   record.Time.Format("15:04"),
+		})
+	}
+	if len(limits) == 0 {
+		return nil
+	}
+	sort.Slice(limits, func(i, j int) bool { return limits[i].Model < limits[j].Model })
+	return limits
 }
 
 // startOfDay 返回某一天的零点（本地时区）。
