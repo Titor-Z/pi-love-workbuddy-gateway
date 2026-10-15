@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -22,7 +23,9 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/netif"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/optional"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/panel"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/piplugin"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relay"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relaytls"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/settings"
@@ -31,15 +34,11 @@ import (
 // shutdownTimeout 是收到中断信号后等待在途请求结束的时间。
 const shutdownTimeout = 10 * time.Second
 
-// commandModels 是「打印模型清单」子命令；不写子命令时默认启动服务。
-const commandModels = "models"
-
-// commandServe 是「前台运行」子命令。
-// 默认是后台运行，这个子命令用于在终端里盯着日志。
-const commandServe = "serve"
-
-// commandBilling 是「查看余额」子命令。
-const commandBilling = "billing"
+// commandPackage 是「导出 pi 扩展」子命令。
+//
+// 它是唯一一个不启动服务的子命令：扩展内嵌在二进制里，
+// 用户拿这个命令把它放到 pi 的扩展目录（或任何目录）去。
+const commandPackage = "package"
 
 // version 是编译期注入的版本号（-ldflags "-X main.version=..."），
 // 直接 go build 时为 dev。
@@ -64,6 +63,9 @@ func run(args []string) error {
 		fmt.Printf("pi-love-workbuddy-gateway %s\n", version)
 		return nil
 	}
+	if len(args) > 0 && args[0] == commandPackage {
+		return runPackage(args[1:])
+	}
 	cfg, err := config.Parse(args)
 	if err != nil {
 		return err
@@ -74,6 +76,81 @@ func run(args []string) error {
 		return runInBackground(cfg, args)
 	}
 	return runServe(cfg, args)
+}
+
+// billingSourceFor 决定余额从哪里读。
+//
+// 客户端模式经 relay 向网关取——本机没有凭证，读不了账单；
+// 网关模式直连账单接口。两种模式在面板那里是同一种东西。
+//
+// 判断顺序不能反：**客户端模式下 billing 本来就是 nil**（凭证在网关那台
+// 机器上），先看它就会直接返回 nil，面板照样 501，透传等于没做。
+func billingSourceFor(parts *runtime) panel.BillingSource {
+	if client, ok := parts.backend.(*relay.Client); ok {
+		return client
+	}
+	if parts.billing == nil {
+		return nil
+	}
+	return panel.LocalBilling{Client: parts.billing}
+}
+
+// runPackage 处理 `package` 子命令。
+//
+// 目前只有一件事可做：把内嵌的 pi 扩展导出到目标目录。
+// 不写 --export 时打印这个小节自己的用法——它和主服务参数的用法不是一回事，
+// 混在一份里会让人以为不写子命令也能导出。
+func runPackage(args []string) error {
+	flags := flag.NewFlagSet(commandPackage, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.Usage = func() {}
+	export := flags.Bool("export", false, "把内嵌的 pi 扩展导出到目标目录（默认本机 pi 的扩展目录）")
+	if err := flags.Parse(args); err != nil {
+		return fmt.Errorf("%v\n\n%s", err, packageUsage())
+	}
+	if flags.NArg() > 1 {
+		return fmt.Errorf("只接受一个目标目录，多给了：%q\n\n%s", flags.Args()[1], packageUsage())
+	}
+	if !*export {
+		fmt.Print(packageUsage())
+		return nil
+	}
+	target := ""
+	if flags.NArg() == 1 {
+		target = flags.Arg(0)
+	}
+	result, err := piplugin.Export(target)
+	if err != nil {
+		return err
+	}
+	switch {
+	case result.Created:
+		fmt.Printf("已把 pi 扩展导出到 %s\n", result.Dir)
+	case result.Replaced:
+		fmt.Printf("已更新 %s（覆盖了此前导出的版本）\n", result.Dir)
+	default:
+		fmt.Printf("已把 pi 扩展导出到 %s\n", result.Dir)
+	}
+	fmt.Printf("写出的文件：%s\n", strings.Join(result.Files, "、"))
+	fmt.Printf("\n接下来：重启 pi（或输入 /reload），然后 /model 里就会出现 workbuddy 这一组。\n")
+	return nil
+}
+
+// packageUsage 是 package 子命令的用法。单独一份，不与主服务参数混排。
+func packageUsage() string {
+	return "\n" + strings.Join([]string{
+		"pi-love-workbuddy-gateway package —— 导出随二进制一起交付的 pi 扩展",
+		"",
+		"  pi-love-workbuddy-gateway package --export [目标目录]",
+		"",
+		"  不带目标目录时写到本机 pi 的扩展目录：",
+		"    " + piplugin.DefaultDir(),
+		"  （认 pi 自己的 PI_CODING_AGENT_DIR，改了它也不会写错地方）",
+		"",
+		"  扩展与网关是一体的：网关的模型目录多一个字段，插件就得跟着认，",
+		"  所以它内嵌在二进制里，不单独发版。重复执行就是更新。",
+		"",
+	}, "\n")
 }
 
 // runInBackground 派生后台进程并把 PID 报给用户，方便随时停掉。
@@ -170,9 +247,9 @@ func runServe(cfg *config.Config, args []string) error {
 		SettingsPath:    appdir.SettingsPath(),
 		Credential:      parts.credential,
 		Upstream:        parts.backend,
-		Billing:         parts.billing,
+		Billing:         billingSourceFor(parts),
 		Overrides:       overrides,
-		OverridesSyncer: parts.overridesSyncer,
+		OverridesSyncer: optional.Cast[panel.OverridesSyncer](parts.overridesSyncer),
 		Journal:         events,
 		Settings:        preferences,
 		Logger:          logger,

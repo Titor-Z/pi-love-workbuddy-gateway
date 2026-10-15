@@ -10,12 +10,15 @@ import (
 
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/appdir"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/atrest"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/billing"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/config"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/panel"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relay"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/settings"
 )
 
@@ -350,5 +353,52 @@ func TestRunJournalPruneStopsOnCancel(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("收到取消信号后没有退出")
+	}
+}
+
+// TestBillingSourceFor 余额来源要按模式选对：网关模式读本机账单，
+// 客户端模式经 relay 向网关取。选错的症状是客户端控制台一直读不出余额。
+func TestBillingSourceFor(t *testing.T) {
+	billingClient := billing.NewClient(nil, "http://127.0.0.1:1")
+
+	gateway := &runtime{billing: billingClient}
+	if _, ok := billingSourceFor(gateway).(panel.LocalBilling); !ok {
+		t.Errorf("网关模式应当用本机账单客户端，得到 %T", billingSourceFor(gateway))
+	}
+
+	// 客户端模式：backend 是 relay 客户端，**而且 billing 是 nil**——
+	// 凭证在网关那台机器上，本机确实没有账单客户端。
+	// 这一条必须照实构造：早先这里顺手把 billing 也塞了进去，
+	// 于是「客户端模式下 billing 是 nil」这个真实前提被掩盖，
+	// 判断顺序写反了测试也不会红，而线上会一直 501。
+	relayClient := &relay.Client{}
+	client := &runtime{backend: relayClient}
+	if source, ok := billingSourceFor(client).(*relay.Client); !ok || source != relayClient {
+		t.Errorf("客户端模式应当经 relay 取余额，得到 %T", billingSourceFor(client))
+	}
+
+	// 没有账单客户端（未配对的客户端）时返回 nil，面板据此给出明确原因。
+	if got := billingSourceFor(&runtime{}); got != nil {
+		t.Errorf("没有余额来源时应当是 nil，得到 %T", got)
+	}
+}
+
+// TestRunPackageExports 子命令要把扩展真的写出去，多余参数要报错。
+func TestRunPackageExports(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "pi-workbuddy")
+	if err := runPackage([]string{"--export", dir}); err != nil {
+		t.Fatalf("导出失败：%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "index.ts")); err != nil {
+		t.Fatalf("扩展没写出去：%v", err)
+	}
+
+	// 多给一个目录要报错：静默忽略第一个会让用户以为写到了自己想要的地方。
+	if err := runPackage([]string{"--export", dir, "多余"}); err == nil {
+		t.Error("多给参数应当报错")
+	}
+	// 不写 --export 时只打印用法，不写文件。
+	if err := runPackage(nil); err != nil {
+		t.Errorf("不带 --export 时不该报错：%v", err)
 	}
 }

@@ -280,12 +280,7 @@
 
   <div class="card tight">
     <div style="padding:12px;border-bottom:3px solid var(--rule)">
-      <input
-        type="search"
-        bind:value={filter}
-        placeholder="过滤模型名…"
-        style="width:100%;font-family:var(--font-mono);font-size:13px;border:3px solid var(--rule);padding:8px 10px;background:var(--paper);color:var(--ink)"
-      />
+      <input type="search" bind:value={filter} placeholder="过滤模型名…" class="wide" />
     </div>
 
     {#if loading}
@@ -427,10 +422,15 @@
   table.edit {
     table-layout: auto;
   }
-  table.edit input[type="text"],
+  /* 输入框的外观由样式表统一定，这里只定「在表格里占多宽」。 */
+  /* 只写 :not([type])：编辑表里的输入框都没写 type。
+     多写一条 input[type="text"] 会被 Svelte 判为未使用的选择器而告警。 */
   table.edit input:not([type]) {
     width: 100%;
     min-width: 120px;
+  }
+  input.wide {
+    width: 100%;
   }
   table.edit input.mono {
     font-family: var(--font-mono);

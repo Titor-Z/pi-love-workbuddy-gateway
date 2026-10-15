@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "target": "ES2022",
+    "module": "ESNext",
+    "checkJs": true,
+    "allowJs": true,
+    "strict": false,
+    "noEmit": true
+  },
+  "include": [
+    "src/**/*"
+  ]
+}

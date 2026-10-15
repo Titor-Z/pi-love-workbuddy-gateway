@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM"],
+    "strict": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    /* pi 的类型从 node_modules 找。它是全局装的，所以先把 pi 链进来：
+         mkdir -p node_modules/@earendil-works
+         ln -s "$(npm root -g)/@earendil-works/pi-coding-agent" node_modules/@earendil-works/
+       不写死绝对路径：pi 装在哪台机器上只有那台机器知道，
+       写死会让别人的检查直接失败。 */
+    "paths": {
+      "@earendil-works/pi-coding-agent": ["./node_modules/@earendil-works/pi-coding-agent/dist/index.d.ts"]
+    }
+  },
+  "include": ["index.ts"]
+}

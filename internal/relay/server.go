@@ -13,16 +13,18 @@
 package relay
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net"
 	"net/http"
-	"reflect"
 	"strings"
 
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/billing"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/optional"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/paircode"
 )
 
@@ -49,6 +51,16 @@ const pairPath = "/relay/v1/pair"
 // 那台机器上的改动必须能带回来。详见 docs/model-overrides-design.md。
 const overridesPath = "/relay/v1/model-overrides"
 
+// billingPath 是余额透传端点。
+//
+// 客户端模式下余额就在网关那台机器上（凭证在那里），客户端自己没有凭证。
+// 以前控制台在客户端模式下只能回一句「请到网关的控制台查看」——用户在两台
+// 机器之间来回跑。这里把它透传过去：与控制台看到的是同一份数字。
+//
+// 敏感度远低于凭证：它只读，且不含任何令牌；能持有网关密钥的人本来就能
+// 用这个账号发请求。
+const billingPath = "/relay/v1/billing"
+
 // credentialPath 是凭证同步端点。
 //
 // 它返回的是账号令牌，比转发请求敏感一个量级，因此有三重保护：
@@ -71,9 +83,11 @@ type Deps struct {
 	PairingCodes *paircode.Code
 	// Overrides 提供模型覆盖表。为 nil 时该端点返回 501：客户端模式下没有它。
 	Overrides OverridesStore
-	PSK       string
-	Version   string
-	Logger    Reporter
+	// Billing 提供余额。为 nil 时该端点返回 501：客户端模式下没有它。
+	Billing BillingSource
+	PSK     string
+	Version string
+	Logger  Reporter
 }
 
 // DeviceRegistry 是 relay 需要的设备表能力。抽窄接口是为了让调用方能不用
@@ -81,6 +95,12 @@ type Deps struct {
 type DeviceRegistry interface {
 	Observe(id, name string)
 	IsRevoked(id string) bool
+}
+
+// BillingSource 是 relay 需要的余额能力。抽窄接口是为了让调用方
+// 不用构造真实的 billing.Client 也能测试。
+type BillingSource interface {
+	Fetch(ctx context.Context) (billing.Snapshot, error)
 }
 
 // OverridesStore 是 relay 需要的覆盖表能力。抽窄接口是为了让调用方
@@ -118,6 +138,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+pingPath, s.authorized(s.handlePing))
 	mux.Handle("/v1/", s.authorized(s.forward()))
 	mux.HandleFunc("GET "+credentialPath, s.authorized(s.handleCredential))
+	mux.HandleFunc("GET "+billingPath, s.authorized(s.handleBilling))
 	mux.HandleFunc("GET "+overridesPath, s.authorized(s.handleGetOverrides))
 	mux.HandleFunc("PUT "+overridesPath, s.authorized(s.handlePutOverrides))
 	// 配对端点不走 authorized：它要拿短码换长密钥，而长密钥正是它还没有的东西。
@@ -189,6 +210,24 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		"psk":     s.deps.PSK,
 		"version": s.deps.Version,
 	})
+}
+
+// handleBilling 把网关侧的余额透传给客户端。
+func (s *Server) handleBilling(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Billing == nil {
+		writeRelayError(w, http.StatusNotImplemented, "not_configured",
+			"本网关没有可读取的余额")
+		return
+	}
+	snapshot, err := s.deps.Billing.Fetch(r.Context())
+	if err != nil {
+		writeRelayError(w, http.StatusBadGateway, "upstream_error", err.Error())
+		return
+	}
+	report := billing.BuildReport(snapshot)
+	// 如实标注来源：这不是本机读的，是网关那台机器读的。
+	report.Source = "gateway"
+	writeJSON(w, http.StatusOK, report)
 }
 
 // handleGetOverrides 下发网关权威那一份覆盖表。
@@ -279,9 +318,9 @@ type CredentialSource interface {
 // 关着的时候返回 403 而不是 404：404 会让客户端以为地址写错了，
 // 而真正的原因是「网关没允许同步」。说清楚差别能省一轮排查。
 func (s *Server) handleCredential(w http.ResponseWriter, r *http.Request) {
-	// 用反射排除「类型化的 nil」：传了 (*T)(nil) 时接口本身非空，
+	// 用 optional.Missing 排除「类型化的 nil」：传了 (*T)(nil) 时接口本身非空，
 	// 直接判等会漏过去，然后在调用时 panic——那会让整个连接断掉。
-	if s.deps.CredentialSource == nil || reflect.ValueOf(s.deps.CredentialSource).IsNil() {
+	if optional.Missing(s.deps.CredentialSource) {
 		writeRelayError(w, http.StatusForbidden, "credential_sync_disabled",
 			"网关未开放凭证同步。请在网关控制台「多设备」页开启。"+
 				"这个端点会交出你的账号令牌，默认必须是关的。")

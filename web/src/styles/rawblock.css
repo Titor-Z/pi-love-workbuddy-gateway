@@ -40,6 +40,10 @@
   --disabled-fg: #6b6960;
   --disabled-rule: #c9c9c2;
 
+  /* 下拉箭头画成内联 SVG 而不是用字符或边框三角：字符会随字体变，
+     边框三角在零圆角的方块里对不齐。颜色随主题换（与 --muted 同值）。 */
+  --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%2355534e' stroke-width='2'/%3E%3C/svg%3E");
+
   --link: #0000ff;
   --ok: #008000;
   --warn: #ffa500;
@@ -100,6 +104,8 @@
   --disabled-bg: #22221d;
   --disabled-fg: #84837b;
   --disabled-rule: #42413b;
+
+  --select-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='7'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23a3a29a' stroke-width='2'/%3E%3C/svg%3E");
 
   /* 只调亮度与饱和度，不动色相：绿还是成功、红还是失败。
      纯蓝 #0000FF 在黑底上几乎看不见，纯红 #FF0000 对比度只有 4.0，
@@ -750,6 +756,14 @@ th.num {
   border-color: var(--ok);
 }
 
+/* 已停用：反白填充。用中性的重色而不是红——这是用户主动关掉的，不是出错。
+   与 .paid 只是碰巧长得一样，语义不同，所以单列一档。 */
+.tag.off {
+  background: var(--invert-bg);
+  color: var(--invert-fg);
+  border-color: var(--invert-bg);
+}
+
 /* 限流：跟 blocked（红）和 promo（橙）都不是一回事——它不是内容问题，
    是排队问题。用中性色 + 虚线边框，视觉上就该排在另两类后面。 */
 .tag.rate {
@@ -839,29 +853,90 @@ button.action.primary {
   border-color: var(--ink);
 }
 
-/* 文本类输入框与 textarea 同一套语言：3px 边框、零圆角、纸底墨字。
-   之前只给 textarea 写了样式，input 走的是浏览器默认——暗色下会是白底黑字。 */
+/* ── 输入控件 ───────────────────────────────────────────
+
+   全部输入控件同一套语言：3px 边框、零圆角、等宽字体、纸底墨字。
+   焦点、禁用、占位符的行为与按钮一致（design.md 第九节）。
+
+   这里踩过一次坑，写下来免得重犯：**`input[type="text"]` 匹配不到
+   `<input>` 本身**。属性选择器匹配的是「写没写这个属性」，不是「浏览器
+   认不认它的默认值」——不带 type 的输入框默认也是 text，但选择器不认它。
+   所以 `input:not([type])` 必须单列一条，否则只写了 `bind:value` 的输入框
+   全是浏览器默认样式（暗色下白底黑字）。 */
+input:not([type]),
 input[type="text"],
+input[type="search"],
 input[type="number"],
-input[type="password"] {
+input[type="password"],
+input[type="date"],
+select,
+textarea {
   font-family: var(--font-mono);
   font-size: 13px;
+  line-height: 1.5;
   border: 3px solid var(--rule);
+  border-radius: 0;
   padding: 8px 10px;
   background: var(--paper);
   color: var(--ink);
 }
 
+/* 占位符是「这里还没写」的提示，不是可读内容：降到 --muted，
+   但不要用透明度——透明度会让同一句提示在深色底上更糊。
+   Firefox 默认给占位符加透明度，所以这里显式写 opacity: 1。 */
+input::placeholder,
+textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
+  font-style: normal;
+}
+
+/* 禁用态与按钮同一套：灰底 + 灰字 + 灰边，不用 opacity。 */
+input:disabled,
+select:disabled,
+textarea:disabled {
+  background: var(--disabled-bg);
+  color: var(--disabled-fg);
+  border-color: var(--disabled-rule);
+  cursor: not-allowed;
+}
+input:disabled::placeholder {
+  color: var(--disabled-fg);
+}
+
+/* 下拉框：去掉系统外观（它在 3px 方框里对不齐），自己画箭头。
+   padding-right 要给箭头让位，否则选项文字会顶到箭头上。 */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  padding-right: 30px;
+  background-image: var(--select-caret);
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+}
+
+/* 复选框：系统控件本身没必要重画（重画要自己实现键盘与语义），
+   但它的强调色默认是浏览器蓝，与这套配色不搭。accent-color 是最省事的正解。 */
+input[type="checkbox"] {
+  accent-color: var(--ink);
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+}
+input[type="checkbox"]:disabled {
+  accent-color: var(--disabled-fg);
+  cursor: not-allowed;
+}
+
 textarea {
   width: 100%;
-  font-family: var(--font-mono);
-  font-size: 13px;
-  line-height: 1.5;
-  border: 3px solid var(--rule);
   padding: 12px;
-  background: var(--paper);
-  color: var(--ink);
   resize: vertical;
+}
+
+/* 搜索框右侧那个系统清除按钮在暗色下是一块白，去掉；用户直接全选删就行。 */
+input[type="search"]::-webkit-search-cancel-button {
+  -webkit-appearance: none;
 }
 
 /* 焦点一律用 outline，不改边框宽度——改宽度会让布局跳动。

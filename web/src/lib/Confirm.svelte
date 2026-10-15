@@ -21,6 +21,10 @@
   } = $props();
 
   let cancelButton;
+  // 焦点陷阱要查对话框里的按钮，所以得有一个对话框本身的引用。
+  // 原来用 event.currentTarget 查——而在 <svelte:window> 上监听时
+  // currentTarget 是 window，window 没有 querySelectorAll，一按 Tab 就抛异常。
+  let dialog;
 
   // 焦点给「取消」而不是「确定」：动作用键盘连按两下回车不该造成破坏。
   onMount(() => cancelButton?.focus());
@@ -34,7 +38,7 @@
     // 最小限度的焦点陷阱：Tab 在两个按钮之间循环，不许跑到后面的页面去。
     if (event.key !== "Tab") return;
     event.preventDefault();
-    const order = [...event.currentTarget.querySelectorAll("button")];
+    const order = [...(dialog?.querySelectorAll("button") ?? [])];
     const index = order.indexOf(document.activeElement);
     const next = event.shiftKey
       ? order[(index - 1 + order.length) % order.length]
@@ -43,18 +47,24 @@
   }
 </script>
 
-<svelte:window {onkeydown} />
+<svelte:window onkeydown={onKeydown} />
 
-<!-- 点遮罩等于取消。role=presentation 是因为遮罩本身不是内容。 -->
-<div class="scrim" role="presentation" onclick={onCancel}>
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
+<!-- 点遮罩等于取消。role=presentation 是因为遮罩本身不是内容。
+     判断「点的是遮罩本身」而不是给对话框加一个空 click 处理器：
+     后者会让对话框变成一个「可点击的非交互元素」，无障碍检查也会这么说。 -->
+<div
+  class="scrim"
+  role="presentation"
+  onclick={(event) => event.target === event.currentTarget && onCancel()}
+>
   <div
     class="dialog"
+    bind:this={dialog}
     role="alertdialog"
+    tabindex="-1"
     aria-modal="true"
     aria-labelledby="dialog-title"
     aria-describedby="dialog-message"
-    onclick={(event) => event.stopPropagation()}
   >
     <h2 id="dialog-title" class="dialog-title">[ {title} ]</h2>
     <p id="dialog-message" class="dialog-message">{message}</p>

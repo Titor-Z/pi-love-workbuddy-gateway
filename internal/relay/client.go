@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/billing"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
@@ -219,6 +220,34 @@ func (c *Client) Models(ctx context.Context) ([]upstream.ModelInfo, error) {
 		})
 	}
 	return models, nil
+}
+
+// FetchBillingReport 向网关要一份余额。
+//
+// 客户端模式下凭证在网关那台机器上，本机没有账单可读——这是唯一一条
+// 拿到余额的路。返回的是网关算好的对外表示，本机不再映射一遍。
+func (c *Client) FetchBillingReport(ctx context.Context) (billing.Report, error) {
+	var report billing.Report
+	request, err := c.newRequest(ctx, http.MethodGet, billingPath, nil)
+	if err != nil {
+		return report, err
+	}
+	response, err := c.http.Do(request)
+	if err != nil {
+		return report, translateError(err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxErrorBody))
+	if err != nil {
+		return report, translateError(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		return report, errorsFromBody(response.StatusCode, raw)
+	}
+	if err := json.Unmarshal(raw, &report); err != nil {
+		return report, fmt.Errorf("网关返回的余额不是合法 JSON：%w", err)
+	}
+	return report, nil
 }
 
 // FetchModelOverrides 拉取网关权威那一份模型覆盖表。

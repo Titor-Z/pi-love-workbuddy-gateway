@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/billing"
 
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
@@ -136,6 +139,76 @@ func TestOverridesEndpointAbsentInClientMode(t *testing.T) {
 	if _, err := client.FetchModelOverrides(context.Background()); err == nil {
 		t.Fatal("没有覆盖表时拉取应当失败")
 	} else if !strings.Contains(err.Error(), "没有可同步") {
+		t.Errorf("错误信息没说清原因：%v", err)
+	}
+}
+
+// fakeBilling 返回一份固定的余额，用来验证透传链路。
+type fakeBilling struct{ fetched int }
+
+func (f *fakeBilling) Fetch(context.Context) (billing.Snapshot, error) {
+	f.fetched++
+	cycleEnd := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	return billing.Snapshot{
+		FetchedAt: time.Date(2026, 10, 16, 3, 0, 0, 0, time.UTC),
+		Packages: []billing.Package{
+			{Name: "CodeBuddy个人体验版", Remain: 492.94, Size: 500, Use: 7.06,
+				TotalRemain: 500, CycleEndTime: cycleEnd},
+		},
+	}, nil
+}
+
+// TestBillingPassthrough 客户端要能经 relay 拿到网关那侧的余额。
+//
+// 以前客户端控制台只会回一句「请到网关的控制台查看」，用户得在两台机器
+// 之间来回跑。这里验证它真的透传了，且形状是网关算好的那一份。
+func TestBillingPassthrough(t *testing.T) {
+	billingSource := &fakeBilling{}
+	_, fingerprint, server := newTestServer(t, Deps{
+		PSK: "topsecret", Logger: discardLogger(), Billing: billingSource,
+		Backend: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}),
+	})
+	client := newOverrideClient(t, server.URL, fingerprint)
+
+	report, err := client.FetchBillingReport(t.Context())
+	if err != nil {
+		t.Fatalf("拉取余额失败：%v", err)
+	}
+	if billingSource.fetched != 1 {
+		t.Errorf("网关侧的账单接口被调用 %d 次，期望 1", billingSource.fetched)
+	}
+	if report.TotalRemain != 492.94 {
+		t.Errorf("总剩余 = %v，期望 492.94", report.TotalRemain)
+	}
+	if len(report.Packages) != 1 || report.Packages[0].Name != "CodeBuddy个人体验版" {
+		t.Fatalf("资源包不对：%+v", report.Packages)
+	}
+	if report.Packages[0].CycleEnd == nil {
+		t.Error("周期结束时间应当带上")
+	}
+	// 结算延迟的提示由服务端给，免得前端再写一遍。
+	if report.SettleHint == "" {
+		t.Error("结算提示是空的")
+	}
+	// 来源必须如实标注：这是网关读的，不是客户端读的。
+	if report.Source != "gateway" {
+		t.Errorf("来源 = %q，想要 gateway", report.Source)
+	}
+}
+
+// TestBillingAbsentReturnsClearError 没有余额来源时要说清是「没有」而不是网络故障。
+func TestBillingAbsentReturnsClearError(t *testing.T) {
+	_, fingerprint, server := newTestServer(t, Deps{
+		PSK: "topsecret", Logger: discardLogger(),
+		Backend: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}),
+	})
+	client := newOverrideClient(t, server.URL, fingerprint)
+
+	_, err := client.FetchBillingReport(context.Background())
+	if err == nil {
+		t.Fatal("没有余额来源时应当失败")
+	}
+	if !strings.Contains(err.Error(), "没有可读取的余额") {
 		t.Errorf("错误信息没说清原因：%v", err)
 	}
 }

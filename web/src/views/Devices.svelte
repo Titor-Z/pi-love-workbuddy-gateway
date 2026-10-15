@@ -1,4 +1,5 @@
 <script>
+  import { onMount } from "svelte";
   import { api, ApiError } from "../lib/api.js";
   import * as fmt from "../lib/format.js";
   import Confirm from "../lib/Confirm.svelte";
@@ -21,6 +22,65 @@
   // 重置后新生成的密钥，只在本页显示一次，刷新就看不到了。
   let freshKey = $state("");
   let pending = $state(null);
+
+  // 相对时间需要一个会走的「现在」，否则「刚刚」会一直停在刚刚。
+  // 30 秒一次：这一页判断的是「谁连着」，分钟级的准确度足够。
+  let now = $state(Date.now());
+  onMount(() => {
+    const timer = setInterval(() => (now = Date.now()), 30000);
+    return () => clearInterval(timer);
+  });
+
+  // 二次确认的文案与按钮，按动作查表。
+  //
+  // 写表而不是在模板里套三元：原先模板里是一串嵌套三元，缺了 `unrevoke`
+  // 那一支，「恢复」会显示成「关闭转发服务？」。查表则每个动作必须显式写全，
+  // 漏一个就是 undefined，模板会当场渲染不出来——错误在写的时候暴露，
+  // 而不是等用户点到那一支才发现。
+  const CONFIRMATIONS = {
+    revoke: {
+      title: "停用这台设备？",
+      message:
+        "这台设备将无法再经本网关转发请求。设备名由客户端自报，换个 ID 就能重连——要彻底挡住只能重置密钥。",
+      label: "停用",
+      danger: true,
+    },
+    unrevoke: {
+      title: "恢复这台设备？",
+      message: "这台设备可以重新经本网关转发请求。",
+      label: "恢复",
+    },
+    reset: {
+      title: "重置网关密钥？",
+      message: "所有客户端的配对立即失效，每台都要重新填新密钥。新密钥只显示这一次。",
+      label: "重置",
+      danger: true,
+    },
+    enable: {
+      title: "开启转发服务？",
+      message: "局域网里的其他电脑就能用这个账号了。改完要重启网关才生效。",
+      label: "开启",
+    },
+    disable: {
+      title: "关闭转发服务？",
+      message: "所有客户端立刻断开，重新开启前用不了。改完要重启网关才生效。",
+      label: "关闭",
+      danger: true,
+    },
+  };
+  const confirmation = $derived(pending ? CONFIRMATIONS[pending.kind] : null);
+
+  // 在线的判据：最近 2 分钟内有请求。
+  // 网关每 30 秒才落盘一次设备表，但接口读的是内存里那份，是实时的，
+  // 所以这个窗口不需要给落盘留余量。取 2 分钟而不是 30 秒：局域网的
+  // 客户端不是长连接，空闲一会儿是正常的，判成离线会误导人。
+  const ONLINE_WINDOW_MS = 2 * 60 * 1000;
+  function deviceState(device) {
+    if (device.revoked) return { text: "已停用", className: "off" };
+    const seen = device.last_seen ? new Date(device.last_seen).getTime() : 0;
+    if (seen && now - seen <= ONLINE_WINDOW_MS) return { text: "在线", className: "ok" };
+    return { text: "离线", className: "rate" };
+  }
 
   async function load() {
     loading = true;
@@ -401,25 +461,31 @@
       <table class="middle">
         <thead>
           <tr>
-            <th style="width:200px">设备</th>
-            <th>设备 ID</th>
-            <th>最近在线</th>
-            <th style="width:120px">状态</th>
-            <th style="width:120px"></th>
+            <th style="width:180px">设备</th>
+            <th style="width:120px">设备 ID</th>
+            <th style="width:120px">最近在线</th>
+            <th style="width:96px">状态</th>
+            <th style="width:96px"></th>
           </tr>
         </thead>
         <tbody>
           {#each relay.devices as device (device.id)}
+            {@const state = deviceState(device)}
             <tr>
               <th>{device.name || "未命名"}</th>
-              <td class="num">{device.id}</td>
-              <td class="num">{device.last_seen ? fmt.time(device.last_seen) : "—"}</td>
+              <!-- ID 只给前 12 位：32 位十六进制谁也不会去读，却要占掉半张表。
+                   12 位与日志页用的是同一个截法，两边能对上号；全文在 title 里。 -->
+              <td class="num" title={device.id}>{fmt.deviceLabel(device.id)}</td>
+              <!-- 相对时间 + 悬停看精确值：一排绝对时间戳读不出「是不是刚连过」，
+                   而那正是看这一页时要判断的事。nowrap 是因为折行会把行撑高，
+                   半行时间戳看起来像坏了。 -->
+              <td class="num nowrap" title={device.last_seen ? fmt.time(device.last_seen) : ""}>
+                {fmt.relative(device.last_seen, now)}
+              </td>
               <td>
-                {#if device.revoked}
-                  <span class="tag">已停用</span>
-                {:else}
-                  <span class="tag ok">可用</span>
-                {/if}
+                <span class="tag {state.className}" title="最近 2 分钟内有请求才算在线">
+                  {state.text}
+                </span>
               </td>
               <td>
                 {#if device.revoked}
@@ -606,20 +672,12 @@
   {/if}
 </section>
 
-{#if pending}
+{#if confirmation}
   <Confirm
-    title={
-      pending.kind === "reset"
-        ? "重置网关密钥？"
-        : pending.kind === "revoke"
-          ? "停用这台设备？"
-          : pending.kind === "enable"
-            ? "开启转发服务？"
-            : "关闭转发服务？"
-    }
-    message={CONFIRM_MESSAGES[pending.kind]}
-    confirmLabel={pending.kind === "reset" ? "重置" : "确定"}
-    danger={pending.kind === "reset" || pending.kind === "revoke"}
+    title={confirmation.title}
+    message={confirmation.message}
+    confirmLabel={confirmation.label}
+    danger={confirmation.danger ?? false}
     onConfirm={run}
     onCancel={cancel}
   />

@@ -1,6 +1,7 @@
 package panel
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -165,7 +166,7 @@ func newLivePanel(t *testing.T) (*Panel, *fakeBackend) {
 		SettingsPath:  filepath.Join(dir, "settings.json"),
 		Credential:    cred,
 		Upstream:      upstream.NewClient(cred, backend.server.URL),
-		Billing:       billing.NewClient(cred, backend.server.URL),
+		Billing:       LocalBilling{Client: billing.NewClient(cred, backend.server.URL)},
 		Overrides:     overrides,
 		Journal:       events,
 		Settings:      preferences,
@@ -221,7 +222,7 @@ func TestBillingEndpoint(t *testing.T) {
 		t.Fatalf("状态码 = %d，想要 200：%s", recorder.Code, recorder.Body.String())
 	}
 
-	var payload billingResponse
+	var payload billing.Report
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("解析响应失败：%v", err)
 	}
@@ -439,15 +440,16 @@ func TestStatusIncludesMode(t *testing.T) {
 	}
 }
 
-// TestBillingAndModelsReportUnavailableInClientMode 客户端模式没有凭证，
-// 余额属于网关那一侧（模型目录不在此列：v0.9.0 起客户端模式经 relay
-// 也能拿到目录，覆盖表的编辑与回推要用它）。这里必须给出明确的原因，
-// 而不是一个「读取失败」——那会被误读成网络问题。
-func TestBillingAndModelsReportUnavailableInClientMode(t *testing.T) {
+// TestBillingAndModelsUnavailableWithoutSource 没有任何后端时（比如还没配对的
+// 客户端），余额与模型目录都必须给出明确原因，而不是一个「读取失败」——
+// 那会被误读成网络问题。
+//
+// 注意：**已配对的客户端模式不属于这种情况**——那时余额经 relay 从网关透传
+// （见 TestBillingFromGatewayInClientMode），模型目录也是。
+func TestBillingAndModelsUnavailableWithoutSource(t *testing.T) {
 	console, _ := newLivePanel(t)
 	console.deps.Credential = nil
 	console.deps.Billing = nil
-	// 未配对时连后端都没有，这时目录确实拿不到。
 	console.deps.Upstream = nil
 
 	for _, path := range []string{"/api/billing", "/api/models", "/api/models/pi"} {
@@ -458,11 +460,6 @@ func TestBillingAndModelsReportUnavailableInClientMode(t *testing.T) {
 		if !strings.Contains(recorder.Body.String(), "not_configured") {
 			t.Errorf("%s 的错误类型不对：%s", path, recorder.Body.String())
 		}
-	}
-	// 余额那条要明确说「属于网关那一侧」，否则用户会去查自己的网络。
-	billingRecorder := call(t, console, http.MethodGet, "/api/billing", nil, nil)
-	if !strings.Contains(billingRecorder.Body.String(), "客户端模式") {
-		t.Errorf("余额错误没有说明是模式问题：%s", billingRecorder.Body.String())
 	}
 }
 
@@ -477,4 +474,45 @@ func readStatus(t *testing.T, console *Panel) map[string]any {
 		t.Fatalf("响应不是 JSON：%v", err)
 	}
 	return payload
+}
+
+// relayBilling 是「余额来自网关」这种来源的替身。
+type relayBilling struct {
+	report billing.Report
+	err    error
+	calls  int
+}
+
+func (r *relayBilling) FetchBillingReport(context.Context) (billing.Report, error) {
+	r.calls++
+	return r.report, r.err
+}
+
+// TestBillingFromGatewayInClientMode 客户端模式不再回 501：
+// 余额经 relay 从网关取，与网关控制台看到的是同一份数字。
+func TestBillingFromGatewayInClientMode(t *testing.T) {
+	console, _ := newLivePanel(t)
+	console.deps.Credential = nil
+	console.deps.Upstream = nil
+	source := &relayBilling{report: billing.Report{
+		TotalRemain: 492.94,
+		Packages:    []billing.PackageView{{Name: "CodeBuddy个人体验版", Remain: 492.94}},
+		SettleHint:  "账单结算有 1～3 分钟延迟，刚发完的请求可能尚未计入",
+	}}
+	console.deps.Billing = source
+
+	recorder := call(t, console, http.MethodGet, "/api/billing", nil, nil)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("状态码 = %d，想要 200：%s", recorder.Code, recorder.Body.String())
+	}
+	var report billing.Report
+	if err := json.Unmarshal(recorder.Body.Bytes(), &report); err != nil {
+		t.Fatalf("解析失败：%v", err)
+	}
+	if report.TotalRemain != 492.94 || len(report.Packages) != 1 {
+		t.Errorf("透传过来的余额不对：%+v", report)
+	}
+	if source.calls != 1 {
+		t.Errorf("来源被调用 %d 次，期望 1", source.calls)
+	}
 }

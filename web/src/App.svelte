@@ -105,7 +105,7 @@
     <!-- 顶部 导航栏 Begin.-->
     <div class="brand">
       <!-- WorkBuddy -->
-      <img width="100px" src="{Logo}">
+      <img width="100px" src="{Logo}" alt="pi-love-workbuddy-gateway" />
       {#if version}<span class="ver">{version}</span>{/if}
     </div> <!-- 顶部 导航栏 End.  -->
 

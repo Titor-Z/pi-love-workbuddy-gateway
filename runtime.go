@@ -371,6 +371,10 @@ func (r *runtime) enableRelay(logger *logging.Logger) error {
 	// 凭证同步是独立开关，与「开放转发服务」并列，默认关。
 	r.syncAllowed = panel.ReadSyncPreference()
 	deps := relay.Deps{PSK: psk, Devices: registry, Version: version, Overrides: r.overrides}
+	// 余额透传：客户端模式下控制台要能显示网关那侧的余额。
+	if r.billing != nil {
+		deps.Billing = r.billing
+	}
 	if r.syncAllowed {
 		deps.CredentialSource = &credentialExporter{
 			cred:  r.credential,

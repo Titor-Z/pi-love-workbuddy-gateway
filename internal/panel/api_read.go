@@ -64,63 +64,23 @@ func (p *Panel) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	})
 }
 
-// billingPackage 是一个资源包的对外表示。
-type billingPackage struct {
-	Name        string     `json:"name"`
-	Remain      float64    `json:"remain"`
-	Size        float64    `json:"size"`
-	Use         float64    `json:"use"`
-	TotalRemain float64    `json:"total_remain"`
-	CycleEnd    *time.Time `json:"cycle_end,omitempty"`
-	Expire      *time.Time `json:"expire,omitempty"`
-}
-
-// billingResponse 是余额页的数据。
-type billingResponse struct {
-	FetchedAt   time.Time        `json:"fetched_at"`
-	TotalRemain float64          `json:"total_remain"`
-	Packages    []billingPackage `json:"packages"`
-	// SettleHint 告诉前端该提示用户什么，免得把提示文案写死在前端。
-	SettleHint string `json:"settle_hint"`
-}
-
 // handleBilling 读取资源包余额。面板不做缓存：账单接口本身有分钟级延迟，
 // 再叠一层缓存只会让数字更难解释。
+//
+// 客户端模式下余额来自网关（经 relay 透传）——凭证在网关那台机器上，
+// 本机没有账单可读。用户不必为了看一眼余额跑回网关的控制台。
 func (p *Panel) handleBilling(w http.ResponseWriter, r *http.Request) {
 	if p.deps.Billing == nil {
-		// 客户端模式不持有凭证，余额属于网关那一侧（后续版本会经转发拉取）。
 		writeError(w, http.StatusNotImplemented, "not_configured",
-			"客户端模式不读取 WorkBuddy 余额，请到网关的控制台查看")
+			"当前模式没有可用的余额来源")
 		return
 	}
-	snapshot, err := p.deps.Billing.Fetch(r.Context())
+	report, err := p.deps.Billing.FetchBillingReport(r.Context())
 	if err != nil {
 		p.fail(w, "读取余额", err)
 		return
 	}
-	response := billingResponse{
-		FetchedAt:   snapshot.FetchedAt,
-		TotalRemain: snapshot.TotalRemain(),
-		Packages:    make([]billingPackage, 0, len(snapshot.Packages)),
-		SettleHint:  "账单结算有 1～3 分钟延迟，刚发完的请求可能尚未计入",
-	}
-	for _, item := range snapshot.Packages {
-		entry := billingPackage{
-			Name:        item.Name,
-			Remain:      item.Remain,
-			Size:        item.Size,
-			Use:         item.Use,
-			TotalRemain: item.TotalRemain,
-		}
-		if !item.CycleEndTime.IsZero() {
-			entry.CycleEnd = &item.CycleEndTime
-		}
-		if !item.ExpireTime.IsZero() {
-			entry.Expire = &item.ExpireTime
-		}
-		response.Packages = append(response.Packages, entry)
-	}
-	writeJSON(w, http.StatusOK, response)
+	writeJSON(w, http.StatusOK, report)
 }
 
 // modelEntry 是模型页的一行。既有合成后的标签，也有覆盖项原文——

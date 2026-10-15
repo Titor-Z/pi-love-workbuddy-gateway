@@ -12,7 +12,7 @@
 
   let { event = null, onClose } = $props();
 
-  let closeButton;
+  let closeButton = $state(undefined);
 
   // 抽屉打开时焦点给关闭按钮；Esc 关闭、点遮罩关闭、Tab 在抽屉内做最小焦点陷阱。
   onMount(() => closeButton?.focus());
@@ -43,18 +43,16 @@
   const hasPayload = $derived(Boolean(event?.request) || Boolean(event?.response));
 </script>
 
-<svelte:window {onKeydown} />
+<svelte:window onkeydown={onKeydown} />
 
-<!-- 遮罩只压暗，不模糊；点遮罩等于关闭。 -->
-<div class="scrim" role="presentation" onclick={onClose}>
-  <!-- svelte-ignore a11y_no_static_element_interactions -->
-  <aside
-    class="drawer"
-    role="dialog"
-    aria-modal="true"
-    aria-label="事件详情"
-    onclick={(e) => e.stopPropagation()}
-  >
+<!-- 遮罩只压暗，不模糊；点遮罩等于关闭。
+     判断「点的是遮罩本身」而不是给抽屉加一个空 click 处理器。 -->
+<div
+  class="scrim"
+  role="presentation"
+  onclick={(event) => event.target === event.currentTarget && onClose()}
+>
+  <div class="drawer" role="dialog" tabindex="-1" aria-modal="true" aria-label="事件详情">
     {#if event}
       <header class="head">
         <div class="title">
@@ -177,7 +175,7 @@
     {:else}
       <div class="empty">没有选中任何事件。</div>
     {/if}
-  </aside>
+  </div>
 </div>
 
 <style>

@@ -32,6 +32,10 @@ func Usage() string {
 		"  pi-love-workbuddy-gateway client  -d -addr 192.168.1.5:8788\n" +
 		"      客户端模式。这台机器不持有凭证，把请求转发给网关。\n" +
 		"\n" +
+		"  pi-love-workbuddy-gateway package --export [目标目录]\n" +
+		"      把随二进制一起交付的 pi 扩展导出去（默认写进本机 pi 的扩展目录）。\n" +
+		"      每次升级网关后重跑一次，插件就跟着更新。\n" +
+		"\n" +
 		"参数：\n" +
 		"  -addr   网关模式：对外服务地址，默认 0.0.0.0:" + fmt.Sprint(defaultRelayPort) + "\n" +
 		"          客户端模式：要连的网关地址\n" +
@@ -43,5 +47,6 @@ func Usage() string {
 		"  " + ConsoleAddr() + "   控制台，只绑本机\n" +
 		"\n" +
 		"pi 的配置里 baseUrl 填 http://" + localAddr() + "/v1 ，两种模式都不用改。\n" +
-		"首次配对在控制台「多设备」页填密钥、比对指纹，不走命令行。\n"
+		"首次配对在控制台「多设备」页填密钥、比对指纹，不走命令行。\n" +
+		"模型目录建议用扩展自动获取，见上面的 package --export。\n"
 }

@@ -68,6 +68,28 @@ export function deviceLabel(id) {
   return id.length > 12 ? `${id.slice(0, 12)}…` : id;
 }
 
+// relative 把时间读成「3 分钟前」。
+//
+// 列表里一整排绝对时间戳读不出「是不是刚连过」——那正是看设备列表时要
+// 判断的事，而判断得先在脑子里做一次减法。相对时间把这一步做掉。
+// 精确值仍然保留，由调用方放进 title。
+//
+// now 必须由调用方传进来而不是在这里读 Date.now()：Svelte 的 $derived
+// 只在依赖变化时重算，内部偷偷读时钟等于永远不更新，「刚刚」会停在刚刚。
+export function relative(value, now) {
+  if (!value) return "—";
+  const then = new Date(value).getTime();
+  if (Number.isNaN(then)) return "—";
+  const seconds = Math.round((now - then) / 1000);
+  // 负数说明两台机器的表没对齐，不当成「未来」。
+  if (seconds < 60) return "刚刚";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} 分钟前`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} 小时前`;
+  // 超过一周就不再说「几天前」了：那时具体日期信息量更大。
+  if (seconds < 7 * 86400) return `${Math.floor(seconds / 86400)} 天前`;
+  return date(value);
+}
+
 // date 只留年月日。
 export function date(value) {
   if (!value) return "—";

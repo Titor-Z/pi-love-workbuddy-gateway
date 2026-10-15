@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/optional"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/overridessync"
 )
 
@@ -23,7 +24,10 @@ type OverridesSyncer interface {
 // handleOverridesStatus 返回同步状态：本机有几处改动、基准停在哪。
 // 不联网——模型页每次打开都要看它，不该为它卡一次网络。
 func (p *Panel) handleOverridesStatus(w http.ResponseWriter, _ *http.Request) {
-	if p.deps.OverridesSyncer == nil {
+	// 用 optional.Missing 而不是判等：网关模式传进来的可能是一个
+	// 「类型化的 nil」（`(*overridessync.Syncer)(nil)`），判等判不出来，
+	// 调用时就会 panic——而那是每次打开模型页都会走到的路径。
+	if optional.Missing(p.deps.OverridesSyncer) {
 		writeError(w, http.StatusNotImplemented, "not_configured",
 			"网关模式不需要同步模型覆盖表：这台机器就是权威")
 		return
@@ -37,7 +41,7 @@ func (p *Panel) handleOverridesStatus(w http.ResponseWriter, _ *http.Request) {
 // 不带就不替用户决定，返回 200 + 冲突清单——冲突是**正常结果**，
 // 不是「操作失败」，所以不用错误码。
 func (p *Panel) handleOverridesSync(w http.ResponseWriter, r *http.Request) {
-	if p.deps.OverridesSyncer == nil {
+	if optional.Missing(p.deps.OverridesSyncer) {
 		writeError(w, http.StatusNotImplemented, "not_configured",
 			"网关模式不需要同步模型覆盖表：这台机器就是权威")
 		return

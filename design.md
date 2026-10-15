@@ -497,9 +497,34 @@ page... looks like a copy-paste accident"*；`taste-skill` 的「Page Theme Lock
   它和相邻 `td` 必须同一种线 —— 否则一行里左 3px 右 1px，看着就断了
 - 数字列加 `.num`：右对齐 + 等宽
 
-### 输入 / 文本域
+### 输入 / 文本域 / 下拉
 
-3px 边框，等宽字体，`--paper` 底。焦点同按钮。
+与按钮同一套语言：3px 边框、零圆角、等宽字体、`--paper` 底。
+
+| 状态 | 表现 |
+|---|---|
+| 默认 | `--paper` 底，`--rule` 边，`--ink` 字 |
+| 占位符 | `--muted` 字，**不用 opacity**（半透明在深色底上更糊，还会叠上底色） |
+| **focus-visible** | 同按钮：`outline: 3px solid var(--ink)` + `outline-offset: 2px` |
+| **disabled** | `--disabled-bg` / `--disabled-fg` / `--disabled-rule`，光标 `not-allowed` |
+| 错误 | 边色换 `--error`，右侧配一句错误文案——**不要只靠颜色** |
+
+**下拉框要自己画箭头**：系统外观在 3px 方框里对不齐。去掉 `appearance` 后用内联
+SVG 数据 URI 画一个折角，颜色随主题换（`--select-caret`），`padding-right` 给箭头让位。
+用字符（`▾`）会随字体变形，用边框三角在方框里对不齐。
+
+**复选框不重画**（重画要自己实现键盘与语义），只调 `accent-color`——
+默认的浏览器蓝与这套配色不搭。
+
+**文本框高度由内容决定，不写死。** 同一行里的输入框与按钮要等高：
+它们共用「3px 边框 + 同一字号 + 同一行高 + 8px 内边距」，高度自然一致。
+
+> **踩过的坑：`input[type="text"]` 匹配不到 `<input>` 本身。**
+> 属性选择器匹配的是「写没写这个属性」，不是「浏览器认不认它的默认值」——
+> 不带 `type` 的输入框默认也是 text，但选择器不认。
+> 所以 `input:not([type])` 必须单列一条，否则只写了 `bind:value` 的表单
+> 全是浏览器默认样式（暗色下白底黑字）。**同样的坑对 `select` 与 `textarea` 不存在——
+> 它们是标签名，没有默认值这回事。**
 
 ### 芯片 / 标签
 

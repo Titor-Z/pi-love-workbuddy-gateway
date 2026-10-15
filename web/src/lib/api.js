@@ -87,7 +87,6 @@ export const api = {
   pairingProbe: (address) => request("POST", "/api/pairing/probe", { address }),
   pairingConfirm: (address, code, psk, fingerprint) =>
     request("POST", "/api/pairing/confirm", { address, code, psk, fingerprint }),
-  restart: () => request("POST", "/api/control/restart"),
   sync: () => request("GET", "/api/sync"),
   setSync: (enabled) => request("POST", "/api/sync", { enable: enabled, confirm: true }),
   syncNow: () => request("POST", "/api/sync/now"),

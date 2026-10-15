@@ -96,3 +96,35 @@ func TestOverridesSyncStatusAndRun(t *testing.T) {
 		t.Errorf("非法选择应当 400，实际 %d", recorder.Code)
 	}
 }
+
+// TestOverridesStatusWithTypedNilSyncer 网关模式下传进来的是一个
+// 「类型化的 nil」同步器（`(*overridessync.Syncer)(nil)`），不是接口的 nil。
+//
+// 这是一个真实发生过的 panic：判等判不出来，`Status()` 解引用 nil 指针，
+// 于是**每次打开模型页**都在 HTTP 处理协程里 panic，返回空响应。
+// 所以这里必须显式用类型化的 nil 来测，用接口的 nil 测不到它。
+func TestOverridesStatusWithTypedNilSyncer(t *testing.T) {
+	console, _ := newLivePanel(t)
+	var syncer *overridessync.Syncer
+	console.deps.OverridesSyncer = syncer
+	if console.deps.OverridesSyncer == nil {
+		t.Fatal("接口不该判成 nil——正是这个现象让当初的守卫失效")
+	}
+
+	for _, path := range []string{"/api/overrides/sync"} {
+		recorder := call(t, console, http.MethodGet, path, nil, nil)
+		if recorder.Code != http.StatusNotImplemented {
+			t.Fatalf("%s 状态码 = %d，想要 501：%s", path, recorder.Code, recorder.Body.String())
+		}
+		if !strings.Contains(recorder.Body.String(), "权威") {
+			t.Errorf("%s 没说清为什么不能同步：%s", path, recorder.Body.String())
+		}
+	}
+
+	// 推送那条路径同样要挡住，否则点「同步」一样 panic。
+	recorder := call(t, console, http.MethodPost, "/api/overrides/sync",
+		strings.NewReader(`{}`), map[string]string{"Content-Type": "application/json"})
+	if recorder.Code != http.StatusNotImplemented {
+		t.Fatalf("推送状态码 = %d，想要 501：%s", recorder.Code, recorder.Body.String())
+	}
+}

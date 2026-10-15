@@ -117,7 +117,12 @@
     <div class="stat hero">
       <div class="label"><span>剩余额度</span></div>
       <div class="value">{billing ? fmt.credit(billing.total_remain) : "—"}</div>
-      <div class="sub">{billing ? `${billing.packages.length} 个资源包` : "读取中"}</div>
+      <div class="sub">
+        {billing ? `${billing.packages.length} 个资源包` : "读取中"}
+        {#if billing?.source === "gateway"}
+          · 来自网关
+        {/if}
+      </div>
     </div>
     <div class="stat">
       <div class="label"><span>拦截 / 拒答</span></div>

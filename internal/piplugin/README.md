@@ -13,18 +13,35 @@
 
 ## 装
 
-三种都行，效果一样：
+**这个扩展内嵌在网关的二进制里，不由这里单独安装。** 网关一条命令把它写进
+pi 的扩展目录：
 
 ```bash
-# 1. 直接用（不改任何配置，适合先试试）
-pi --extension ./index.ts
-
-# 2. 放进 pi 的扩展目录（长期使用，每个会话都有）
-cp -r . ~/.pi/agent/extensions/pi-workbuddy
-
-# 3. 装成包（发布到 npm 之后）
-pi install npm:pi-workbuddy
+pi-love-workbuddy-gateway package --export
 ```
+
+升级网关后重跑一次就是更新。不去 npm、也不公开。
+
+装到别处（给另一台机器导出）用带参数的形式：
+
+```bash
+pi-love-workbuddy-gateway package --export /tmp/pi-workbuddy
+```
+
+装完重启 pi（或 `/reload`）。目录里只有两个文件：`index.ts` 与这份说明——
+扩展是 pi 直接加载的单文件，不需要 `package.json`。
+
+临时试一次也可以直接用 pi 自己的机制：
+
+```bash
+pi --extension ./index.ts
+```
+
+## 与网关同步更新
+
+扩展要认网关 `/v1/models` 里的字段。两者分开发布的话，版本迟早对不上，
+而症状会是「模型列表少了东西」这种不容易一眼看出的事。
+所以它跟着二进制走，**版本对不上这件事从设计上就不存在**。
 
 ## 用
 
@@ -51,6 +68,18 @@ WorkBuddy 的 `credit` 与 token 不成比例（实测 glm-5.3 约 0.77×、mini
 
 ## 开发
 
+改完 `index.ts` 用 pi 自己的类型做一次静态检查。pi 通常是全局装的，
+所以先把它的类型链到本地 `node_modules`，再跑 `tsc`：
+
 ```bash
-npx -p typescript@5 tsc -p tsconfig.json
+cd internal/piplugin
+mkdir -p node_modules/@earendil-works
+ln -s "$(npm root -g)/@earendil-works/pi-coding-agent" node_modules/@earendil-works/
+npx --yes -p typescript@5 tsc -p tsconfig.json
 ```
+
+`tsconfig.json` 里 `paths` 写的是 `./node_modules/...` 而不是绝对路径——
+pi 装在哪台机器上只有那台机器知道，写死会让别人的检查直接失败。
+
+**这个目录里的 `node_modules` 不入库**（只是那个软链接），
+所以它也不在 `package --export` 写出的文件里：pi 加载扩展只需要 `index.ts`。

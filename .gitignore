@@ -15,16 +15,14 @@ secrets.json
 # 前端依赖（构建产物在 internal/webui/dist，那个要入库）
 web/node_modules/
 
-# pi 扩展的依赖（源码入库，node_modules 不入库）
-packages/*/node_modules/
+# pi 扩展的源码只有 index.ts 单文件；这个 node_modules 只是指向全局 pi 的软链接，
+# 用来给 tsc 解析 pi 的类型，不入库。
+internal/piplugin/node_modules/
 
 # 编辑器 / 系统
 .DS_Store
 .idea/
 .vscode/
 
-# 编译产物
-/pi-love-workbuddy-gateway
-
-# 本地编译产物
+# 编译产物（clone 下来自己 go build）
 /pi-love-workbuddy-gateway

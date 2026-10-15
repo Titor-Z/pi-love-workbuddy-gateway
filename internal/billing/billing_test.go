@@ -238,3 +238,36 @@ func TestNewClientDefaultsToOfficialHost(t *testing.T) {
 		t.Errorf("baseURL = %q", client.baseURL)
 	}
 }
+
+// TestBuildReportKeepsWhatTheClientNeeds 对外表示要带上客户端渲染用的全部字段。
+func TestBuildReportKeepsWhatTheClientNeeds(t *testing.T) {
+	cycleEnd := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	report := BuildReport(Snapshot{
+		FetchedAt: time.Date(2026, 10, 16, 3, 0, 0, 0, time.UTC),
+		Packages: []Package{
+			{Name: "主包", Remain: 11.5, Size: 20, Use: 8.5, TotalRemain: 20, CycleEndTime: cycleEnd},
+			// 没有周期结束时间、也没有失效时间的包：两个字段都该留空，
+			// 不能塞一个零值时间——那会显示成 0001-01-01。
+			{Name: "赠送包", Remain: 3.5, Size: 5, Use: 1.5, TotalRemain: 5},
+		},
+	})
+	if len(report.Packages) != 2 {
+		t.Fatalf("资源包数 = %d，想要 2", len(report.Packages))
+	}
+	if report.TotalRemain != 15 {
+		t.Errorf("总剩余 = %v，想要 15", report.TotalRemain)
+	}
+	if report.Packages[0].CycleEnd == nil || !report.Packages[0].CycleEnd.Equal(cycleEnd) {
+		t.Error("有周期结束时间的包必须带上它")
+	}
+	if report.Packages[1].CycleEnd != nil || report.Packages[1].Expire != nil {
+		t.Error("没有结束时间的包不该带出零值时间")
+	}
+	if !report.FetchedAt.Equal(time.Date(2026, 10, 16, 3, 0, 0, 0, time.UTC)) {
+		t.Error("读取时刻没带上")
+	}
+	// 默认来源是本机；经 relay 下发的那份由服务端改成 "gateway"。
+	if report.Source != "local" {
+		t.Errorf("来源 = %q，想要 local", report.Source)
+	}
+}

@@ -2,6 +2,7 @@ package panel
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -84,9 +85,11 @@ type Deps struct {
 
 	Credential *credential.Manager
 	Upstream   gateway.Backend
-	Billing    *billing.Client
-	Overrides  *catalog.Store
-	Journal    *journal.Journal
+	// Billing 是「余额从哪来」。网关模式是本地账单客户端，
+	// 客户端模式是经 relay 向网关取。抽成接口，面板不必知道是哪一种。
+	Billing   BillingSource
+	Overrides *catalog.Store
+	Journal   *journal.Journal
 	// OverridesSyncer 只在客户端模式非空：模型覆盖表要与网关对齐。
 	OverridesSyncer OverridesSyncer
 	// Settings 是面板可改的运行偏好（日志每页条数、保留天数）。
@@ -94,6 +97,25 @@ type Deps struct {
 	Settings *settings.Store
 	Logger   *logging.Logger
 	Control  *Control
+}
+
+// BillingSource 是余额来源。
+type BillingSource interface {
+	FetchBillingReport(ctx context.Context) (billing.Report, error)
+}
+
+// LocalBilling 把本地账单客户端接成 BillingSource（网关模式用）。
+type LocalBilling struct {
+	Client *billing.Client
+}
+
+// FetchBillingReport 读一次本机账单并转成对外表示。
+func (l LocalBilling) FetchBillingReport(ctx context.Context) (billing.Report, error) {
+	snapshot, err := l.Client.Fetch(ctx)
+	if err != nil {
+		return billing.Report{}, err
+	}
+	return billing.BuildReport(snapshot), nil
 }
 
 // Panel 是本机 Web 控制台。

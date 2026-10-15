@@ -94,14 +94,25 @@ pi 连   http://127.0.0.1:8788/v1
 
 ### 第三步：让 pi 认识它
 
-推荐用配套的 pi 扩展，**不用手写 `models.json`**：
+推荐用配套的 pi 扩展，**不用手写 `models.json`**。它就内嵌在网关的二进制里，
+一条命令装好：
 
 ```bash
-pi --extension ./packages/pi-workbuddy/index.ts
+pi-love-workbuddy-gateway package --export
 ```
 
-装成包（`pi install`）或把那个目录放进 `~/.pi/agent/extensions/` 也都可以，
-三种方式效果一样，详见 [`packages/pi-workbuddy/README.md`](packages/pi-workbuddy/README.md)。
+它默认写进本机 pi 的扩展目录（`~/.pi/agent/extensions/pi-workbuddy/`，
+认 pi 自己的 `PI_CODING_AGENT_DIR`）。**网关升级后重跑一次就是更新**，
+不用去 npm 上找、也永远不会和网关版本对不上。
+
+要给另一台机器导出、或者只想先看看文件，可以指定目录：
+
+```bash
+pi-love-workbuddy-gateway package --export /tmp/pi-workbuddy
+```
+
+扩展做了什么、`PLWG_BASE_URL` 怎么改，见
+[`internal/piplugin/README.md`](internal/piplugin/README.md)。
 
 它带来的差别：**每次打开 `/model` 都会从网关重新拉一次模型目录**。
 所以你在控制台改完别名、免费截止、思考档位，回 pi 再打开一次就是新的。
@@ -132,6 +143,7 @@ pi --model workbuddy/step-5-preview "帮我看看这个项目"
 | `pi-love-workbuddy-gateway` | 网关模式（默认）。这台机器持有凭证，其他电脑连它 |
 | `pi-love-workbuddy-gateway gateway -d -addr 0.0.0.0:8788` | 同上，写全 |
 | `pi-love-workbuddy-gateway client -d -addr 192.168.1.5:8788` | 客户端模式。转发给网关 |
+| `pi-love-workbuddy-gateway package --export [目录]` | 把内嵌的 pi 扩展写进 pi 的扩展目录（不带目录时写本机那份） |
 | `pi-love-workbuddy-gateway -help` | 用法 |
 | `pi-love-workbuddy-gateway -version` | 打印版本号 |
 
@@ -176,6 +188,9 @@ pkill -f pi-love-workbuddy-gateway
 ### 查看余额
 
 打开控制台总览页，右上角就是资源包余额与明细。
+
+**客户端模式下这一块也照常显示**：凭证在网关那台机器上，余额由网关读出后
+经局域网传回来，会标注「来自网关」。
 
 > **账单结算有 1～3 分钟延迟，而且是按批到账的。**
 > 刚发完请求就来查很可能看到「没扣」。这不是漏计。
@@ -896,9 +911,16 @@ const (
 ```bash
 cd web
 npm install
-npm run build     # 输出到 ../internal/webui/dist
+npm run build     # 先跑 svelte-check，再输出到 ../internal/webui/dist
+npm run check     # 只做静态检查（类型、未定义变量、无障碍）
 npm run dev       # 可选：热更新，需要网关已经在跑
 ```
+
+`npm run build` 会先跑一遍 `svelte-check`。原因是一次真实的教训：控制台有个按钮
+引用了**并不存在**的 `CONFIRM_MESSAGES`，点下去抛 `ReferenceError`、什么反应都没有，
+而这个错误 `vite build` 不会报——打包器不管「这个变量存不存在」。静态检查一眼就能看出。
+（扩展那边同样有 `tsc` 静态检查，用的是 pi 自己的类型，见
+[`internal/piplugin/README.md`](internal/piplugin/README.md)。）
 
 **构建产物（`internal/webui/dist/`）是入库的**，就是为了让你 clone 下来直接 `go build`
 就能出带界面的二进制，不需要 Node。所以**改了前端一定要重新 build 并提交** `dist`。
