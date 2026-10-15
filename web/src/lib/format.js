@@ -45,11 +45,27 @@ export function time(value) {
   return date.toLocaleString("zh-CN", { hour12: false });
 }
 
-// clock 只留「时:分:秒」，日志那一列用得上。
-export function clock(value) {
+// stamp 是日志里的时间戳：年-月-日 时:分:秒。
+//
+// 必须带年：日志会跨年留存（保留期上限 365 天），只写「时:分:秒」
+// 的话用户无从判断这是哪一年的事。
+export function stamp(value) {
   if (!value) return "—";
   const date = new Date(value);
-  return date.toLocaleTimeString("zh-CN", { hour12: false });
+  if (Number.isNaN(date.getTime())) return "—";
+  const pad = (part) => String(part).padStart(2, "0");
+  return (
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ` +
+    `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+  );
+}
+
+// deviceLabel 把设备 ID 缩成一眼能读的前缀。
+// 本机直连（pi 直接连网关）没有设备 ID，用「本机」区分于「某台客户端」。
+// 完整 ID 由调用方放进 title，悬停可见——日志表里不需要占一整个宽度。
+export function deviceLabel(id) {
+  if (!id) return "本机";
+  return id.length > 12 ? `${id.slice(0, 12)}…` : id;
 }
 
 // date 只留年月日。

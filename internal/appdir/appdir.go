@@ -21,15 +21,34 @@ const PromotionsFileName = "promotions.json"
 // LogFileName 是默认日志文件名（人类读的文本日志）。
 const LogFileName = "gateway.log"
 
-// JournalFileName 是默认事件文件名（面板读的 JSONL）。
+// JournalDirName 是事件分片目录名。
+//
+// 事件按天分片存放（<prefix>-YYYY-MM-DD.jsonl，prefix 为 gateway / client），
+// 而不是全部追加进一个文件。理由：单文件会随时间无限膨胀，而「保留 N 天」
+// 在分片下就是删掉几个文件（O(1)），不需要重写整个文件；读取时也只需打开
+// 最近几个分片，不必把历史全量解析一遍。
+const JournalDirName = "journal"
+
+// JournalFileName 是 v0.8.0 及以前的事件文件名（面板读的 JSONL）。
+// 现在只作为一次性迁移的来源，不再往里写。
 const JournalFileName = "gateway.jsonl"
 
-// ClientJournalFileName 是客户端模式的默认事件文件名。
+// ClientJournalFileName 是客户端模式旧版的事件文件名，同样只作迁移来源。
 //
 // 与网关模式刻意不用同一个文件：同一台机器上两种模式可能同时跑（先切出去试
 // 一试），跨进程就没有 Journal 那把进程内互斥锁了，写同一个文件会交错成坏行。
 // 换文件名比引文件锁简单得多，也让「切换模式」这件事天然可解释。
 const ClientJournalFileName = "client.jsonl"
+
+// SettingsFileName 是面板可改的运行偏好（日志每页条数、保留天数）。
+const SettingsFileName = "settings.json"
+
+// JournalPrefixGateway / JournalPrefixClient 是两种模式的事件分片文件名前缀。
+// 分开是为了让同一台机器上两种模式各自的日志互不干扰。
+const (
+	JournalPrefixGateway = "gateway"
+	JournalPrefixClient  = "client"
+)
 
 // CredentialEpochFileName 是网关侧的同步计数器。
 //
@@ -94,11 +113,16 @@ func PromotionsPath() string { return join(Dir(), PromotionsFileName) }
 // LogPath 返回日志文件的默认路径。
 func LogPath() string { return join(Dir(), LogFileName) }
 
-// JournalPath 返回网关模式下事件文件（JSONL）的默认路径。
+// JournalDir 返回事件分片目录。
+func JournalDir() string { return join(Dir(), JournalDirName) }
+
+// SettingsPath 返回运行偏好文件的默认路径。
+func SettingsPath() string { return join(Dir(), SettingsFileName) }
+
+// JournalPath 返回旧版网关模式单文件事件的路径，仅用于一次性迁移。
 func JournalPath() string { return join(Dir(), JournalFileName) }
 
-// ClientJournalPath 返回客户端模式下事件文件的默认路径。
-// 与网关模式分开，两者互不干扰，也无需跨进程加锁。
+// ClientJournalPath 返回旧版客户端模式单文件事件的路径，同样只作迁移来源。
 func ClientJournalPath() string { return join(Dir(), ClientJournalFileName) }
 
 // CredentialEpochPath 返回同步计数器文件路径。

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,21 +13,26 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/config"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/settings"
 )
 
-// TestJournalPathDiffersPerMode 两种模式必须写不同的事件文件。
+// TestJournalTargetDiffersPerMode 两种模式必须写不同的分片前缀与旧文件。
 //
 // 同一台机器上它们可能被同时跑着（先切过去试一试），而跨进程就没有
 // Journal 那把进程内互斥锁了，写同一个文件会交错成坏行。
-func TestJournalPathDiffersPerMode(t *testing.T) {
-	gateway := journalPathForMode(&config.Config{Mode: config.ModeGateway})
-	client := journalPathForMode(&config.Config{Mode: config.ModeClient})
-	if gateway == "" || client == "" {
-		t.Fatalf("事件文件路径不该为空：gateway=%q client=%q", gateway, client)
+func TestJournalTargetDiffersPerMode(t *testing.T) {
+	gatewayDir, gatewayPrefix, gatewayLegacy := journalTargetForMode(&config.Config{Mode: config.ModeGateway})
+	clientDir, clientPrefix, clientLegacy := journalTargetForMode(&config.Config{Mode: config.ModeClient})
+	if gatewayDir == "" || clientDir == "" {
+		t.Fatalf("事件目录不该为空：gateway=%q client=%q", gatewayDir, clientDir)
 	}
-	if gateway == client {
-		t.Fatalf("两种模式写同一个文件 %q——跨进程并发会把行切开", gateway)
+	if gatewayPrefix == clientPrefix {
+		t.Fatalf("两种模式共用同一个分片前缀 %q——跨进程并发会把行切开", gatewayPrefix)
+	}
+	if gatewayLegacy == clientLegacy {
+		t.Fatalf("两种模式的旧事件文件路径相同：%q", gatewayLegacy)
 	}
 }
 
@@ -212,5 +219,131 @@ func writePlainCredentialCopy(t *testing.T, epoch int64, credential map[string]a
 		Credential: credential,
 	}); err != nil {
 		t.Fatalf("写副本失败：%v", err)
+	}
+}
+
+// TestMigrateLegacyJournal 旧版单文件要按记录时间拆进分片，成功后源文件改名——
+// 不改名的话下次启动会再导入一遍，日志就重了。
+func TestMigrateLegacyJournal(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := logging.New(filepath.Join(dir, "test.log"), false)
+	if err != nil {
+		t.Fatalf("建日志失败：%v", err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+
+	events, err := journal.Open(filepath.Join(dir, "journal"), "gateway")
+	if err != nil {
+		t.Fatalf("打开事件目录失败：%v", err)
+	}
+	t.Cleanup(func() { _ = events.Close() })
+
+	// 基准对齐到秒：事件里存的是 RFC3339（秒精度）。
+	base := time.Now().Truncate(time.Second)
+	legacy := filepath.Join(dir, "gateway.jsonl")
+	body := `{"t":"` + base.AddDate(0, 0, -1).Format(time.RFC3339) +
+		`","kind":"chat","msg":"昨天"}` + "\n" +
+		`{"t":"` + base.Format(time.RFC3339) + `","kind":"chat","msg":"今天"}` + "\n"
+	if err := os.WriteFile(legacy, []byte(body), 0o600); err != nil {
+		t.Fatalf("写旧文件失败：%v", err)
+	}
+
+	migrateLegacyJournal(events, legacy, logger)
+
+	if _, err := os.Stat(legacy); !os.IsNotExist(err) {
+		t.Error("源文件应当被改名，否则下次启动会重复导入")
+	}
+	if _, err := os.Stat(legacy + ".migrated"); err != nil {
+		t.Errorf("改名后的源文件不在了：%v", err)
+	}
+
+	records, err := events.Read(time.Time{})
+	if err != nil {
+		t.Fatalf("读取失败：%v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("读回 %d 条，期望 2", len(records))
+	}
+	if records[0].Message != "昨天" || records[1].Message != "今天" {
+		t.Errorf("导入顺序不对：%q / %q", records[0].Message, records[1].Message)
+	}
+}
+
+// TestMigrateLegacyJournalMissingFile 没有旧文件是正常情况：不报错、不 panic，
+// 也不能凭空生成一个 .migrated 文件。
+func TestMigrateLegacyJournalMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := logging.New(filepath.Join(dir, "test.log"), false)
+	if err != nil {
+		t.Fatalf("建日志失败：%v", err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+
+	events, err := journal.Open(filepath.Join(dir, "journal"), "gateway")
+	if err != nil {
+		t.Fatalf("打开事件目录失败：%v", err)
+	}
+	t.Cleanup(func() { _ = events.Close() })
+
+	legacy := filepath.Join(dir, "gateway.jsonl")
+	migrateLegacyJournal(events, legacy, logger)
+
+	if _, err := os.Stat(legacy + ".migrated"); !os.IsNotExist(err) {
+		t.Error("没有旧文件时不该生成 .migrated")
+	}
+}
+
+// TestRunJournalPruneStopsOnCancel 清理任务是常驻 goroutine：
+// 启动时要先跑一轮，收到取消信号要能退出——退出路径写错会让进程关不掉。
+func TestRunJournalPruneStopsOnCancel(t *testing.T) {
+	dir := t.TempDir()
+	logger, err := logging.New(filepath.Join(dir, "test.log"), false)
+	if err != nil {
+		t.Fatalf("建日志失败：%v", err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+
+	events, err := journal.Open(filepath.Join(dir, "journal"), "gateway")
+	if err != nil {
+		t.Fatalf("打开事件目录失败：%v", err)
+	}
+	t.Cleanup(func() { _ = events.Close() })
+
+	store, err := settings.Open(filepath.Join(dir, "settings.json"))
+	if err != nil {
+		t.Fatalf("打开偏好失败：%v", err)
+	}
+
+	// 铺一个早就过期的分片：启动那一轮就该把它删掉，
+	// 否则用户要等 6 小时才看到自己改的保留期生效。
+	oldPath := filepath.Join(events.Dir(),
+		"gateway-"+time.Now().AddDate(0, 0, -30).Format("2006-01-02")+".jsonl")
+	if err := os.WriteFile(oldPath, []byte("{}\n"), 0o600); err != nil {
+		t.Fatalf("写旧分片失败：%v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runJournalPrune(ctx, events, store, logger)
+	}()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(oldPath); os.IsNotExist(err) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err := os.Stat(oldPath); !os.IsNotExist(err) {
+		t.Error("启动那一轮没有清理过期分片")
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("收到取消信号后没有退出")
 	}
 }

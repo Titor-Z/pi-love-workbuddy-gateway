@@ -295,6 +295,9 @@ code.copyable {
 
 .dim {
   color: var(--muted);
+  /* 说明文字比正文小一号。和正文一样大的话它就变成了「第二段正文」，
+     读的人分不出哪句是内容、哪句是注解（.hint 那一档早就是 11px 了）。 */
+  font-size: 12px;
 }
 
 /* 一行操作按钮：靠间距分组，不画线（design.md 通则一）。 */
@@ -662,6 +665,15 @@ tbody th {
   vertical-align: top;
 }
 
+/* 一行只有短值与按钮/标签时改用中间对齐。
+   上面那档 top 是给多行说明列的：那种列内容越高，各列把内容顶到上边才对。
+   但「设备名 + ID + 时间 + 状态标签 + 按钮」这类行里，按钮高约 40px、
+   纯文本行高约 19px，全部 top 对齐就会看到按钮的文字比旁边低一截。 */
+table.middle td,
+table.middle tbody th {
+  vertical-align: middle;
+}
+
 /* 行标签：与右边的值同一行，线型必须一致。 */
 tbody th {
   text-align: left;
@@ -825,6 +837,19 @@ button.action.primary {
   background: var(--ink);
   color: var(--paper);
   border-color: var(--ink);
+}
+
+/* 文本类输入框与 textarea 同一套语言：3px 边框、零圆角、纸底墨字。
+   之前只给 textarea 写了样式，input 走的是浏览器默认——暗色下会是白底黑字。 */
+input[type="text"],
+input[type="number"],
+input[type="password"] {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  border: 3px solid var(--rule);
+  padding: 8px 10px;
+  background: var(--paper);
+  color: var(--ink);
 }
 
 textarea {

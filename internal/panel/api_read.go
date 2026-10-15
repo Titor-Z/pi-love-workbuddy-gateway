@@ -197,15 +197,23 @@ func (p *Panel) handlePiModels(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleEvents 返回最近的运行事件。数据量小，尾部截取即可。
+// handleEvents 返回最近的运行事件。
+//
+// 只读保留期内的分片：更早的本来就被清理掉了，限定范围也让「用得越久读得越慢」
+// 不会发生。默认条数由前端传，后端只负责给完整数据。
 func (p *Panel) handleEvents(w http.ResponseWriter, r *http.Request) {
 	limit := 100
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
-			limit = min(parsed, 1000)
+			limit = min(parsed, 5000)
 		}
 	}
-	records, err := p.deps.Journal.ReadSince(time.Time{})
+	since := time.Time{}
+	if p.deps.Settings != nil {
+		days := p.deps.Settings.Get().LogRetentionDays
+		since = time.Now().AddDate(0, 0, -(days - 1))
+	}
+	records, err := p.deps.Journal.Read(since)
 	if err != nil {
 		p.fail(w, "读取事件", err)
 		return

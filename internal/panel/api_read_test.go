@@ -17,6 +17,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/settings"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/upstream"
 )
 
@@ -137,11 +138,16 @@ func newLivePanel(t *testing.T) (*Panel, *fakeBackend) {
 	}
 	t.Cleanup(func() { _ = logger.Close() })
 
-	events, err := journal.Open(filepath.Join(dir, "events.jsonl"))
+	events, err := journal.Open(filepath.Join(dir, "journal"), "gateway")
 	if err != nil {
 		t.Fatalf("建事件文件失败：%v", err)
 	}
 	t.Cleanup(func() { _ = events.Close() })
+
+	preferences, err := settings.Open(filepath.Join(dir, "settings.json"))
+	if err != nil {
+		t.Fatalf("建偏好失败：%v", err)
+	}
 
 	promotions, err := catalog.LoadPromotions("")
 	if err != nil {
@@ -154,13 +160,15 @@ func newLivePanel(t *testing.T) (*Panel, *fakeBackend) {
 		AuthFile:       filepath.Join(dir, "workbuddy-desktop.info"),
 		ListenAddr:     "127.0.0.1:8788",
 		LogPath:        filepath.Join(dir, "gateway.log"),
-		JournalPath:    filepath.Join(dir, "events.jsonl"),
+		JournalPath:    events.Path(),
 		PromotionsPath: filepath.Join(dir, "promotions.json"),
+		SettingsPath:   filepath.Join(dir, "settings.json"),
 		Credential:     cred,
 		Upstream:       upstream.NewClient(cred, backend.server.URL),
 		Billing:        billing.NewClient(cred, backend.server.URL),
 		Promotions:     promotions,
 		Journal:        events,
+		Settings:       preferences,
 		Logger:         logger,
 		Control:        NewControl(),
 	})

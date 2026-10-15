@@ -69,6 +69,12 @@
           <div class="block-title">概览</div>
           <dl class="kv">
             <div><dt>时间</dt><dd>{fmt.time(event.t)}</dd></div>
+            <div>
+              <dt>设备</dt>
+              <dd title={event.device || "本机直连"}>
+                {event.device || "本机"}
+              </dd>
+            </div>
             <div><dt>模型</dt><dd>{event.model ?? "—"}</dd></div>
             <div><dt>方式</dt><dd>{event.stream ? "流式" : "非流式"}</dd></div>
             <div><dt>状态</dt><dd class:err={event.status >= 400}>{event.status ?? "—"}</dd></div>

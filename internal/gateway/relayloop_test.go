@@ -39,8 +39,7 @@ func TestRelayLoopBucketsEventsByDevice(t *testing.T) {
 	defer upstream.Close()
 
 	// 网关侧：同一个 Server 实例同时挂进 API 与 relay 两个 mux。
-	eventsPath := dir + "/gateway.jsonl"
-	events, err := journal.Open(eventsPath)
+	events, err := journal.Open(dir+"/journal", "gateway")
 	if err != nil {
 		t.Fatalf("打开事件文件失败：%v", err)
 	}
@@ -148,7 +147,7 @@ func TestRelayLoopRejectsWrongPSKFromClientSide(t *testing.T) {
 func waitForRelayRecords(t *testing.T, events *journal.Journal) []journal.Record {
 	t.Helper()
 	for attempt := 0; attempt < 60; attempt++ {
-		records, err := events.ReadSince(time.Time{})
+		records, err := events.Read(time.Time{})
 		if err != nil {
 			t.Fatalf("读取事件失败：%v", err)
 		}

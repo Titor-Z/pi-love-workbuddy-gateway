@@ -68,6 +68,8 @@ export const api = {
   events: (limit = 200) => request("GET", `/api/events?limit=${limit}`),
   promotions: () => request("GET", "/api/promotions"),
   savePromotions: (promotions) => request("PUT", "/api/promotions", { promotions }),
+  settings: () => request("GET", "/api/settings"),
+  saveSettings: (settings) => request("PUT", "/api/settings", settings),
   relay: () => request("GET", "/api/relay"),
   revokeDevice: (id) => request("POST", `/api/devices/revoke?id=${encodeURIComponent(id)}`),
   unrevokeDevice: (id) => request("POST", `/api/devices/unrevoke?id=${encodeURIComponent(id)}`),

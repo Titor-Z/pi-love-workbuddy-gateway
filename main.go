@@ -25,6 +25,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/panel"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relay"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relaytls"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/settings"
 )
 
 // shutdownTimeout 是收到中断信号后等待在途请求结束的时间。
@@ -101,11 +102,22 @@ func runServe(cfg *config.Config, args []string) error {
 	if err != nil {
 		return err
 	}
-	events, err := journal.Open(journalPathForMode(cfg))
+	journalDir, journalPrefix, legacyJournal := journalTargetForMode(cfg)
+	events, err := journal.Open(journalDir, journalPrefix)
 	if err != nil {
 		return err
 	}
 	defer events.Close()
+
+	// 旧版单文件（v0.8.0 及以前）一次性导入分片目录。
+	migrateLegacyJournal(events, legacyJournal, logger)
+
+	// 运行偏好：日志每页条数、保留天数。清理任务与面板都读它，
+	// 所以不能只在启动时读一次。
+	preferences, err := settings.Open(appdir.SettingsPath())
+	if err != nil {
+		return err
+	}
 
 	// 两种模式的差别只在这里：谁去取数据。
 	// 之后的一切（网关 Handler、面板、HTTP 服务）完全一样。
@@ -148,11 +160,13 @@ func runServe(cfg *config.Config, args []string) error {
 		LogPath:        appdir.LogPath(),
 		JournalPath:    events.Path(),
 		PromotionsPath: appdir.PromotionsPath(),
+		SettingsPath:   appdir.SettingsPath(),
 		Credential:     parts.credential,
 		Upstream:       parts.backend,
 		Billing:        parts.billing,
 		Promotions:     promotions,
 		Journal:        events,
+		Settings:       preferences,
 		Logger:         logger,
 		Control:        control,
 	})
@@ -235,6 +249,10 @@ func runServe(cfg *config.Config, args []string) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+
+	// 日志按保留天数清理：启动时先跑一次（用户改了保留期就重启的话，
+	// 旧日志应该马上消失），之后每 6 小时检查一次。
+	go runJournalPrune(ctx, events, preferences, logger)
 
 	events.Append(journal.Record{Kind: journal.KindStart, Version: version,
 		Message: fmt.Sprintf("启动 %s，监听 %s", version, cfg.ListenAddr)})

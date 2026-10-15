@@ -94,7 +94,7 @@ func (p *Panel) handleUsage(w http.ResponseWriter, r *http.Request) {
 	now := time.Now()
 	from := startOfDay(now).AddDate(0, 0, -(days - 1))
 
-	records, err := p.deps.Journal.ReadSince(from)
+	records, err := p.deps.Journal.Read(from)
 	if err != nil {
 		p.fail(w, "读取事件", err)
 		return

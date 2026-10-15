@@ -15,19 +15,25 @@
   let page = $state(1);
   let selected = $state(null); // 抽屉当前展示的事件；null 表示关闭
 
-  // 每页条数。列表不做内部滚动（外层页面已经是滚动容器，套两层会互相抢滚轮），
-  // 所以长列表靠分页。
-  const PAGE_SIZE = 50;
+  // 每页条数由设置页控制（默认 10 条）。
+  let pageSize = $state(10);
 
   async function load() {
     loading = true;
     error = "";
     try {
       // 倒序显示：最近的在上面。
-      // 一次取够再在前端分页：50 条一页，300 条只有 6 页太浅。
-      events = (await api.events(1000)).events.reverse();
+      // 一次取够再在前端分页：每页 10 条的话 200 条只有 20 页，再长就真是
+      // 「最近」的范围问题了，不是分页问题。
+      events = (await api.events(2000)).events.reverse();
     } catch (cause) {
       error = cause.message;
+    }
+    try {
+      const payload = await api.settings();
+      if (payload?.settings?.log_page_size) pageSize = payload.settings.log_page_size;
+    } catch {
+      // 设置读不到不影响看日志，用当前的每页条数继续。
     }
     loading = false;
   }
@@ -62,14 +68,14 @@
   // 明细表只列对话。其它事件（启动、续期）没有 token 和费用，
   // 混进来会留一堆空列，反而看不清想问的那件事。
   const chats = $derived(visible.filter((event) => event.kind === "chat"));
-  const pagedChats = $derived(chats.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
+  const pagedChats = $derived(chats.slice((page - 1) * pageSize, page * pageSize));
 
   const blockedTotal = $derived(events.filter((e) => e.blocked).length);
 
   // 页码基数跟当前视图走：明细视图只列对话，时间线列全部。
   const total = $derived(view === "detail" ? chats.length : visible.length);
-  const pageCount = $derived(Math.max(1, Math.ceil(total / PAGE_SIZE)));
-  const paged = $derived(visible.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE));
+  const pageCount = $derived(Math.max(1, Math.ceil(total / pageSize)));
+  const paged = $derived(visible.slice((page - 1) * pageSize, page * pageSize));
 
   // 翻页后把列表顶端带进视野，否则翻完还在页面底部，看不出内容换了。
   function goPage(next) {
@@ -168,7 +174,8 @@
         <table>
           <thead>
             <tr>
-              <th style="width:96px">时间</th>
+              <th style="width:170px">时间</th>
+              <th style="width:130px">设备</th>
               <th>模型</th>
               <th>结束</th>
               <th>拦截原因</th>
@@ -183,7 +190,8 @@
           <tbody>
             {#each pagedChats as event, index (index)}
               <tr class="row" role="button" tabindex="0" onclick={() => (selected = event)} onkeydown={(e) => e.key === "Enter" && (selected = event)}>
-                <td class="num">{fmt.clock(event.t)}</td>
+                <td class="num stamp">{fmt.stamp(event.t)}</td>
+                <td class="num" title={event.device || "本机直连"}>{fmt.deviceLabel(event.device)}</td>
                 <td class="num">
                   {event.model}
                   {#if event.blocked}<span class="tag blocked">拦截</span>{/if}
@@ -233,7 +241,8 @@
         <table class="timeline">
           <thead>
             <tr>
-              <th style="width:96px">时间</th>
+              <th style="width:170px">时间</th>
+              <th style="width:130px">设备</th>
               <th style="width:72px">类型</th>
               <th>说明</th>
             </tr>
@@ -241,7 +250,8 @@
           <tbody>
             {#each paged as event, index (index)}
               <tr class="row" class:blocked={event.blocked} onclick={() => (selected = event)}>
-                <td class="num">{fmt.clock(event.t)}</td>
+                <td class="num stamp">{fmt.stamp(event.t)}</td>
+                <td class="num" title={event.device || "本机直连"}>{fmt.deviceLabel(event.device)}</td>
                 <td class="num">{fmt.kindLabel(event.kind)}</td>
                 <td class="wrap">
                   {event.msg || "—"}
@@ -279,6 +289,13 @@
 {/if}
 
 <style>
+  /* 时间戳必须在一行里读完。折行会让「日期」与「时分秒」看起来像两条记录，
+     而这一列恰恰是用户定位「什么时候发生的」的唯一依据。
+     列宽按 19 个等宽字符算（13px 字号下约 148px）再加内边距。 */
+  td.stamp {
+    white-space: nowrap;
+  }
+
   .cache-rate {
     font-size: 10px;
     color: var(--muted);

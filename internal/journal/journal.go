@@ -1,9 +1,12 @@
 // Package journal 记录结构化的运行事件，供 Web 面板统计。
 //
-// 格式选 JSONL（一行一个 JSON）而不是数据库：
+// 存储是**按天分片的 JSONL**（<prefix>-YYYY-MM-DD.jsonl），不是数据库：
 //
-//   - 单用户的数据量下（一天几百条、一年几 MB），全量扫描是毫秒级，
-//     引 SQLite 需要第三方依赖或 cgo，会破坏「单二进制、零依赖」这个前提；
+//   - 「保留 N 天」在分片下就是删掉几个文件（O(1)），不需要重写整个文件；
+//     单文件要清理只能重写全量，删比写还贵；
+//   - 读取只打开涉及的那几个分片，成本跟**查询天数**有关、跟历史总量无关——
+//     单文件最容易出的问题就是「用得越久，面板读得越慢」；
+//   - 不引 SQLite 就不需要第三方依赖或 cgo，守住「单二进制、零依赖」这个前提；
 //   - 文件本身保持人类可读，`tail` 能看、`grep` 能搜、`jq` 能算；
 //   - 追加写入不需要事务，进程被 kill 也不会损坏已有内容。
 //
@@ -31,6 +34,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -199,32 +204,52 @@ type RequestSummary struct {
 	MaxTokens int  `json:"max_tokens,omitempty"`
 }
 
-// Journal 是只追加的事件文件。
+// Journal 是按天分片的事件目录。
+//
+// 每个分片是 <prefix>-YYYY-MM-DD.jsonl，写入时按记录时间选分片、
+// 跨天自动切文件。这样「保留 N 天」就是删掉几个文件，
+// 读取时也只打开涉及的那几个分片，不必把历史全量解析一遍。
+// 它还顺带修掉了一个旧毛病：单文件里历史越长，一次读取越慢。
 type Journal struct {
-	path string
-	mu   sync.Mutex
-	file *os.File
+	dir    string
+	prefix string
+
+	mu      sync.Mutex
+	file    *os.File
+	fileDay string // 当前打开分片的日期（YYYY-MM-DD）；空表示还没打开
 }
 
-// Open 打开（不存在则创建）事件文件，父目录会自动建立。
-func Open(path string) (*Journal, error) {
-	if path == "" {
-		return nil, fmt.Errorf("事件文件路径为空")
+// dayLayout 是分片文件名里的日期格式。用连字符是为了让文件名排序即时间排序。
+const dayLayout = "2006-01-02"
+
+// Open 准备事件分片目录，父目录会自动建立。
+func Open(dir, prefix string) (*Journal, error) {
+	if dir == "" {
+		return nil, fmt.Errorf("事件目录为空")
 	}
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return nil, fmt.Errorf("创建事件目录失败：%w", err)
-		}
+	if prefix == "" {
+		return nil, fmt.Errorf("事件文件前缀为空")
 	}
-	file, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("打开事件文件失败：%w", err)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, fmt.Errorf("创建事件目录失败：%w", err)
 	}
-	return &Journal{path: path, file: file}, nil
+	return &Journal{dir: dir, prefix: prefix}, nil
 }
 
-// Path 返回事件文件路径。
-func (j *Journal) Path() string { return j.path }
+// Dir 返回分片目录。
+func (j *Journal) Dir() string { return j.dir }
+
+// Path 返回当前正在写的分片路径（面板上展示用）。
+func (j *Journal) Path() string {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return filepath.Join(j.dir, j.shardName(time.Now()))
+}
+
+// shardName 是某一天的分片文件名。
+func (j *Journal) shardName(at time.Time) string {
+	return j.prefix + "-" + at.Format(dayLayout) + ".jsonl"
+}
 
 // Append 追加一条事件。Time 为零时自动补上当前时间。
 // 写入失败不返回错误——记录日志失败不该让请求本身失败。
@@ -237,23 +262,41 @@ func (j *Journal) Append(record Record) {
 	// 之后整个面板都读不出事件——曾经就是这样炸的。
 	record.RequestText = truncatePayload(record.RequestText)
 	record.ResponseText = truncatePayload(record.ResponseText)
-	// 不用 json.Marshal：它会把 < > & 转义成 \u003c 之类，
-	// 而这些字符在模型名、错误信息里很常见，转义后 grep 与 jq 都难用。
-	var buffer bytes.Buffer
-	encoder := json.NewEncoder(&buffer)
-	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(record); err != nil {
+	line, err := encodeRecord(record)
+	if err != nil {
 		return
 	}
-	line := buffer.Bytes()
 
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	// 进程可能已经 Close 过（退出路径上会先停服务再关文件）。
+	if err := j.openLocked(record.Time); err != nil {
+		return
+	}
 	if j.file == nil {
 		return
 	}
 	_, _ = j.file.Write(line)
+}
+
+// openLocked 确保当前打开的是给定日期那一片。
+// 跨天时关掉昨天的、打开今天的——所以进程连跑一周也不会写错分片。
+func (j *Journal) openLocked(at time.Time) error {
+	day := at.Format(dayLayout)
+	if j.file != nil && j.fileDay == day {
+		return nil
+	}
+	if j.file != nil {
+		_ = j.file.Close()
+		j.file = nil
+	}
+	file, err := os.OpenFile(filepath.Join(j.dir, j.shardName(at)),
+		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	j.file, j.fileDay = file, day
+	return nil
 }
 
 // Close 关闭事件文件；重复调用是安全的。
@@ -268,20 +311,51 @@ func (j *Journal) Close() error {
 	return err
 }
 
-// ReadSince 读取指定时间之后的事件。
-// since 为零值则读取全部。文件不存在时返回空结果而不是错误——
-// 首次运行时这个文件本来就不存在。
-func (j *Journal) ReadSince(since time.Time) ([]Record, error) {
-	file, err := os.Open(j.path)
+// Read 读取指定时间之后的事件。since 为零值则读取全部分片。
+// 目录不存在时返回空结果而不是错误——首次运行时它本来就不存在。
+func (j *Journal) Read(since time.Time) ([]Record, error) {
+	j.mu.Lock()
+	days, err := j.shardDaysLocked()
+	j.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	// 分片名是 YYYY-MM-DD，字典序即时间序，所以能直接用字符串比较跳过旧分片：
+	// 这是按天分片白拿的一半收益——读取量只跟查询天数有关，跟历史总量无关。
+	sinceDay := ""
+	if !since.IsZero() {
+		sinceDay = since.Format(dayLayout)
+	}
+	now := time.Now()
+	records := make([]Record, 0, 256)
+	for _, day := range days {
+		if sinceDay != "" && day < sinceDay {
+			continue
+		}
+		if err := j.readShard(filepath.Join(j.dir, j.shardPath(day)), since, &records); err != nil {
+			return nil, err
+		}
+	}
+	// 过期的对话正文脱敏后再返回，避免明文长期留在读取结果里。
+	for index := range records {
+		records[index] = records[index].RedactPayloads(now)
+	}
+	return records, nil
+}
+
+// readShard 读一个分片里的记录，追加到 out。since 为零值表示不限时间。
+// 分片可能在读取途中被清理任务删掉，所以文件不存在直接跳过。
+func (j *Journal) readShard(path string, since time.Time, out *[]Record) error {
+	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil
 		}
-		return nil, fmt.Errorf("打开事件文件失败：%w", err)
+		return fmt.Errorf("打开事件分片失败：%w", err)
 	}
 	defer file.Close()
 
-	records := make([]Record, 0, 256)
 	reader := bufio.NewReaderSize(file, 64<<10)
 	for {
 		line, tooLong, err := readLine(reader)
@@ -289,12 +363,12 @@ func (j *Journal) ReadSince(since time.Time) ([]Record, error) {
 			// 老版本写下的超长行。跳过它继续读后面的——
 			// 读不出**一条**记录，不该让整个面板空白。
 			if err != nil {
-				break
+				return nil
 			}
 			continue
 		}
 		if err != nil {
-			break
+			return nil
 		}
 		if len(line) == 0 {
 			continue
@@ -307,10 +381,151 @@ func (j *Journal) ReadSince(since time.Time) ([]Record, error) {
 		if !since.IsZero() && record.Time.Before(since) {
 			continue
 		}
-		// 过期的对话正文脱敏后再返回，避免明文长期留在读取结果里。
-		records = append(records, record.RedactPayloads(time.Now()))
+		*out = append(*out, record)
 	}
-	return records, nil
+}
+
+// shardPath 由分片日期拼出文件名。day 来自 shardDaysLocked，格式已校验过。
+func (j *Journal) shardPath(day string) string {
+	return j.prefix + "-" + day + ".jsonl"
+}
+
+// shardDaysLocked 列出目录里属于本前缀的分片日期，按升序返回。
+// 只认文件名形状正确的项，别的东西（比如用户自己扔进来的笔记）一律忽略。
+func (j *Journal) shardDaysLocked() ([]string, error) {
+	entries, err := os.ReadDir(j.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("读取事件目录失败：%w", err)
+	}
+	prefix := j.prefix + "-"
+	days := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasPrefix(name, prefix) || !strings.HasSuffix(name, ".jsonl") {
+			continue
+		}
+		day := strings.TrimSuffix(strings.TrimPrefix(name, prefix), ".jsonl")
+		if _, err := time.Parse(dayLayout, day); err != nil {
+			continue
+		}
+		days = append(days, day)
+	}
+	sort.Strings(days)
+	return days, nil
+}
+
+// Prune 删除超过保留天数的分片，返回被删掉的文件名。
+//
+// 依据是**文件名里的日期**而不是 mtime：分片名就是它的时间，
+// 搬目录、改过系统时间都不会让它误删或漏删。
+// retentionDays <= 0 时不删任何东西（宁可占磁盘，也不误删用户数据）。
+func (j *Journal) Prune(retentionDays int) ([]string, error) {
+	if retentionDays <= 0 {
+		return nil, nil
+	}
+	j.mu.Lock()
+	days, err := j.shardDaysLocked()
+	j.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+
+	// 「保留 7 天」= 今天加前 6 天，所以 cutoff 要减 retentionDays-1。
+	cutoff := time.Now().AddDate(0, 0, -(retentionDays - 1)).Format(dayLayout)
+	removed := make([]string, 0, len(days))
+	for _, day := range days {
+		if day >= cutoff {
+			continue
+		}
+		name := j.shardPath(day)
+		if err := os.Remove(filepath.Join(j.dir, name)); err != nil && !os.IsNotExist(err) {
+			return removed, fmt.Errorf("删除旧事件分片失败：%w", err)
+		}
+		removed = append(removed, name)
+	}
+	return removed, nil
+}
+
+// ImportLegacy 把旧版单文件事件按记录时间拆进分片，返回导入的条数。
+//
+// 只读源文件、不删除：调用方在确认导入成功后再把源文件改名，
+// 这样中途出错也不会把用户的日志弄丢，也不会下次重复导入。
+func (j *Journal) ImportLegacy(path string) (int, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0, nil
+		}
+		return 0, fmt.Errorf("打开旧事件文件失败：%w", err)
+	}
+	defer file.Close()
+
+	count := 0
+	reader := bufio.NewReaderSize(file, 64<<10)
+	for {
+		line, tooLong, err := readLine(reader)
+		if tooLong {
+			if err != nil {
+				break
+			}
+			continue
+		}
+		if err != nil {
+			break
+		}
+		if len(line) == 0 {
+			continue
+		}
+		var record Record
+		if json.Unmarshal(line, &record) != nil {
+			continue
+		}
+		if record.Time.IsZero() {
+			record.Time = time.Now()
+		}
+		if err := j.appendToShard(record); err != nil {
+			return count, err
+		}
+		count++
+	}
+	return count, nil
+}
+
+// appendToShard 把一条记录写进它所属日期的分片，不碰当前已打开的文件。
+// 迁移期间与正常写入可能并发，所以走追加模式而不是复用 j.file。
+func (j *Journal) appendToShard(record Record) error {
+	record.RequestText = truncatePayload(record.RequestText)
+	record.ResponseText = truncatePayload(record.ResponseText)
+	line, err := encodeRecord(record)
+	if err != nil {
+		return err
+	}
+	file, err := os.OpenFile(filepath.Join(j.dir, j.shardName(record.Time)),
+		os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("打开事件分片失败：%w", err)
+	}
+	defer file.Close()
+	if _, err := file.Write(line); err != nil {
+		return fmt.Errorf("写入事件分片失败：%w", err)
+	}
+	return nil
+}
+
+// encodeRecord 把一条记录编码成一行 JSON。
+// 不用 json.Marshal：它会把 < > & 转义成 \u003c 之类，
+// 而这些字符在模型名、错误信息里很常见，转义后 grep 与 jq 都难用。
+func encodeRecord(record Record) ([]byte, error) {
+	var buffer bytes.Buffer
+	encoder := json.NewEncoder(&buffer)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(record); err != nil {
+		return nil, err
+	}
+	return buffer.Bytes(), nil
 }
 
 // maxLineBytes 是单行事件的读取上限，只作兜底。

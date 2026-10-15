@@ -21,6 +21,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/paircode"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/settings"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/webui"
 )
 
@@ -80,14 +81,18 @@ type Deps struct {
 	LogPath        string
 	JournalPath    string
 	PromotionsPath string
+	SettingsPath   string
 
 	Credential *credential.Manager
 	Upstream   gateway.Backend
 	Billing    *billing.Client
 	Promotions *catalog.Promotions
 	Journal    *journal.Journal
-	Logger     *logging.Logger
-	Control    *Control
+	// Settings 是面板可改的运行偏好（日志每页条数、保留天数）。
+	// 它不是启动时读一次的配置：清理任务与日志页都要读最新的值。
+	Settings *settings.Store
+	Logger   *logging.Logger
+	Control  *Control
 }
 
 // Panel 是本机 Web 控制台。
@@ -145,6 +150,8 @@ func (p *Panel) Handler() http.Handler {
 	mux.HandleFunc("GET /api/events", p.guarded(p.handleEvents))
 	mux.HandleFunc("GET /api/promotions", p.guarded(p.handleGetPromotions))
 	mux.HandleFunc("PUT /api/promotions", p.guarded(p.handlePutPromotions))
+	mux.HandleFunc("GET /api/settings", p.guarded(p.handleGetSettings))
+	mux.HandleFunc("PUT /api/settings", p.guarded(p.handlePutSettings))
 
 	// 转发服务与设备管理。只在网关模式下有意义，客户端模式一律 501。
 	mux.HandleFunc("GET /api/relay", p.guarded(p.handleRelay))

@@ -27,6 +27,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/panel"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relay"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relaytls"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/settings"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/upstream"
 )
 
@@ -391,17 +392,75 @@ func setSyncPreference(enabled bool) error {
 	return os.WriteFile(path, append(raw, '\n'), 0o644)
 }
 
-// journalPathForMode 按模式给出事件文件路径。
+// journalTargetForMode 按模式给出事件分片目录、文件前缀与旧版单文件路径。
 //
-// 两个模式用不同的文件：同一台机器上它们可能被同时跑着（先切过去试一试），
-// 而跨进程就没有 Journal 那把进程内互斥锁了，写同一个文件会交错成坏行。
-// 换文件名比引文件锁简单，也让「切模式」这件事天然可解释：
-// 旧的那份仍然在，没有被迁移或清空。
-func journalPathForMode(cfg *config.Config) string {
+// 两个模式用不同的前缀（gateway / client）：同一台机器上它们可能被同时跑着
+// （先切过去试一试），而跨进程就没有 Journal 那把进程内互斥锁了，
+// 写同一个文件会交错成坏行。分前缀比引文件锁简单，也让「切模式」
+// 这件事天然可解释：旧的那份仍然在，没有被迁移或清空。
+//
+// legacy 是 v0.8.0 及以前的单文件事件，只在启动时导入一次。
+func journalTargetForMode(cfg *config.Config) (dir, prefix, legacy string) {
 	if cfg.Mode == config.ModeClient {
-		return appdir.ClientJournalPath()
+		return appdir.JournalDir(), appdir.JournalPrefixClient, appdir.ClientJournalPath()
 	}
-	return appdir.JournalPath()
+	return appdir.JournalDir(), appdir.JournalPrefixGateway, appdir.JournalPath()
+}
+
+// migrateLegacyJournal 把 v0.8.0 及以前的单文件事件导入分片目录。
+//
+// 失败只写一条警告，不当作启动错误：迁移不成功不影响新日志写入，
+// 旧文件也原样留在原处，不会丢数据——「宁可不迁移，也不丢日志」。
+// 只有导入成功且确实有记录时才把源文件改名（加 .migrated 后缀），
+// 否则下次启动会重复导入一遍。
+func migrateLegacyJournal(events *journal.Journal, legacyPath string, logger *logging.Logger) {
+	imported, err := events.ImportLegacy(legacyPath)
+	if err != nil {
+		logger.Printf("⚠️ 导入旧事件文件失败（不影响运行）：%v", err)
+		return
+	}
+	if imported == 0 {
+		return
+	}
+	if err := os.Rename(legacyPath, legacyPath+".migrated"); err != nil {
+		logger.Printf("⚠️ 旧事件文件改名失败，下次启动会重复导入：%v", err)
+		return
+	}
+	logger.Printf("已把旧事件文件里的 %d 条记录导入日志分片目录", imported)
+}
+
+// journalPruneInterval 是日志清理的检查间隔。
+//
+// 6 小时而不是「每天零点」：网关可能不是整天开着的，定点任务一旦错过就
+// 永远不跑；间隔式检查不依赖进程活得够久。
+const journalPruneInterval = 6 * time.Hour
+
+// runJournalPrune 按偏好里的保留天数定期清理旧日志分片。
+// 启动时先跑一次：用户改了保留期就重启的话，旧日志应该马上消失。
+func runJournalPrune(ctx context.Context, events *journal.Journal,
+	store *settings.Store, logger *logging.Logger) {
+	prune := func() {
+		removed, err := events.Prune(store.Get().LogRetentionDays)
+		if err != nil {
+			logger.Printf("✗ 清理旧日志失败：%v", err)
+			return
+		}
+		if len(removed) > 0 {
+			logger.Printf("按保留 %d 天清理了 %d 个旧日志分片：%v",
+				store.Get().LogRetentionDays, len(removed), removed)
+		}
+	}
+	prune()
+	ticker := time.NewTicker(journalPruneInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			prune()
+		}
+	}
 }
 
 // credentialExporter 把本机的凭证管理器暴露成 relay 能用的凭证源。

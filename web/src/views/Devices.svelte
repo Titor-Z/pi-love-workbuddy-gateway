@@ -339,7 +339,7 @@
 
     <div class="card" style="margin-top:24px">
       <h3>连接信息</h3>
-      <table style="margin-top:12px">
+      <table class="middle" style="margin-top:12px">
         <tbody>
           <!-- 值 + 操作**同一行**。把按钮单独放一栏会让它们竖着堆起来，
                和左边的值对不齐；一行的东西就该在一行上。 -->
@@ -398,7 +398,7 @@
     </div>
 
     <div class="card tight" style="margin-top:24px">
-      <table>
+      <table class="middle">
         <thead>
           <tr>
             <th style="width:200px">设备</th>
@@ -477,7 +477,7 @@
     </div>
     {#if pairStep === "form"}
       <div class="card tight">
-        <table>
+        <table class="middle">
           <tbody>
             <tr>
               <th style="width:200px">网关地址</th>
@@ -553,7 +553,7 @@
         本机是<strong>客户端</strong>，凭证由网关同步过来、加密存在本机。
         它只在切到网关模式时才被使用。
       </p>
-      <table>
+      <table class="middle">
         <tbody>
           <tr>
             <th style="width:200px">网关凭证版本</th>

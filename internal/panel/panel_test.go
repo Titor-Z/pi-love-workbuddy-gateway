@@ -13,6 +13,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/settings"
 )
 
 // newTestPanel 造一个只依赖临时目录的面板。
@@ -27,11 +28,16 @@ func newTestPanel(t *testing.T) (*Panel, *Control, *journal.Journal) {
 	}
 	t.Cleanup(func() { _ = logger.Close() })
 
-	events, err := journal.Open(filepath.Join(dir, "events.jsonl"))
+	events, err := journal.Open(filepath.Join(dir, "journal"), "gateway")
 	if err != nil {
 		t.Fatalf("建事件文件失败：%v", err)
 	}
 	t.Cleanup(func() { _ = events.Close() })
+
+	preferences, err := settings.Open(filepath.Join(dir, "settings.json"))
+	if err != nil {
+		t.Fatalf("建偏好失败：%v", err)
+	}
 
 	control := NewControl()
 	console, err := New(Deps{
@@ -42,8 +48,10 @@ func newTestPanel(t *testing.T) (*Panel, *Control, *journal.Journal) {
 		LogPath:        filepath.Join(dir, "gateway.log"),
 		JournalPath:    filepath.Join(dir, "events.jsonl"),
 		PromotionsPath: filepath.Join(dir, "promotions.json"),
+		SettingsPath:   filepath.Join(dir, "settings.json"),
 		Promotions:     &catalog.Promotions{},
 		Journal:        events,
+		Settings:       preferences,
 		Logger:         logger,
 		Control:        control,
 	})

@@ -580,7 +580,7 @@ func TestHealthNeverLeaksToken(t *testing.T) {
 
 // newGatewayWithJournal 与 newGateway 类似，但会接一个真实的事件文件，
 // 便于测试「事件里到底记了什么」。
-func newGatewayWithJournal(t *testing.T, backend *fakeBackend, apiKey string, expiresAt time.Time) (http.Handler, string) {
+func newGatewayWithJournal(t *testing.T, backend *fakeBackend, apiKey string, expiresAt time.Time) (http.Handler, *journal.Journal) {
 	t.Helper()
 	authFile := writeAuthFile(t, t.TempDir(), testAccessToken, testRefreshToken, expiresAt)
 
@@ -598,8 +598,8 @@ func newGatewayWithJournal(t *testing.T, backend *fakeBackend, apiKey string, ex
 	}
 	t.Cleanup(func() { _ = logger.Close() })
 
-	journalPath := filepath.Join(t.TempDir(), "gateway.jsonl")
-	events, err := journal.Open(journalPath)
+	journalDir := filepath.Join(t.TempDir(), "journal")
+	events, err := journal.Open(journalDir, "gateway")
 	if err != nil {
 		t.Fatalf("打开事件文件失败：%v", err)
 	}
@@ -615,18 +615,13 @@ func newGatewayWithJournal(t *testing.T, backend *fakeBackend, apiKey string, ex
 		events,
 		0, // 并发不限：集成测试要能并行跑
 	)
-	return server.Handler(), journalPath
+	return server.Handler(), events
 }
 
-// readLastChatEvent 读出事件文件里最近一条对话事件。
-func readLastChatEvent(t *testing.T, path string) journal.Record {
+// readLastChatEvent 读出事件里最近一条对话事件。
+func readLastChatEvent(t *testing.T, events *journal.Journal) journal.Record {
 	t.Helper()
-	records, err := journal.Open(path)
-	if err != nil {
-		t.Fatalf("打开事件文件失败：%v", err)
-	}
-	defer records.Close()
-	all, err := records.ReadSince(time.Time{})
+	all, err := events.Read(time.Time{})
 	if err != nil {
 		t.Fatalf("读取事件失败：%v", err)
 	}
@@ -645,14 +640,14 @@ func TestChatPolicyCodeMarksBlocked(t *testing.T) {
 	backend := newFakeBackend(t)
 	backend.chatStatus = http.StatusForbidden
 	backend.chatRaw = `{"code":11128,"msg":"安全策略拦截"}`
-	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+	handler, events := newGatewayWithJournal(t, backend, "", later())
 
 	recorder := postChat(t, handler, `{"model":"glm-5.3","messages":[{"role":"user","content":"hi"}]}`)
 
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("状态码 = %d，期望 403", recorder.Code)
 	}
-	event := readLastChatEvent(t, journalPath)
+	event := readLastChatEvent(t, events)
 	if !event.Blocked {
 		t.Errorf("11128 应确定记为拦截，得到 blocked=%v", event.Blocked)
 	}
@@ -669,11 +664,11 @@ func TestChatNonPolicyErrorNotBlocked(t *testing.T) {
 	backend := newFakeBackend(t)
 	backend.chatStatus = http.StatusBadRequest
 	backend.chatRaw = `{"code":40001,"msg":"模型不存在"}`
-	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+	handler, events := newGatewayWithJournal(t, backend, "", later())
 
 	postChat(t, handler, `{"model":"nope","messages":[{"role":"user","content":"hi"}]}`)
 
-	event := readLastChatEvent(t, journalPath)
+	event := readLastChatEvent(t, events)
 	if event.Blocked {
 		t.Error("普通错误码不应计入拦截")
 	}
@@ -689,11 +684,11 @@ func TestChatRefusalHeuristicFlagged(t *testing.T) {
 	backend.chatRaw = "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"抱歉，我不能提供这个内容\"},\"finish_reason\":\"stop\"}]}\n" +
 		"data: {\"id\":\"1\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}\n" +
 		"data: [DONE]\n"
-	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+	handler, events := newGatewayWithJournal(t, backend, "", later())
 
 	postChat(t, handler, `{"model":"glm-5.3","messages":[{"role":"user","content":"hi"}]}`)
 
-	event := readLastChatEvent(t, journalPath)
+	event := readLastChatEvent(t, events)
 	if event.Blocked {
 		t.Error("礼貌拒答不应算确定拦截")
 	}
@@ -708,11 +703,11 @@ func TestChatPayloadStoredOnlyWhenBlocked(t *testing.T) {
 	backend := newFakeBackend(t)
 	backend.chatStatus = http.StatusForbidden
 	backend.chatRaw = `{"code":11128,"msg":"安全策略拦截"}`
-	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+	handler, events := newGatewayWithJournal(t, backend, "", later())
 
 	postChat(t, handler, `{"model":"glm-5.3","messages":[{"role":"user","content":"教我绕过审核"}]}`)
 
-	event := readLastChatEvent(t, journalPath)
+	event := readLastChatEvent(t, events)
 	if event.RequestText == "" {
 		t.Error("被拦事件应留存请求正文，否则无法复盘")
 	}
@@ -724,11 +719,11 @@ func TestChatPayloadStoredOnlyWhenBlocked(t *testing.T) {
 // TestChatPayloadAbsentOnNormalChat 正常对话绝不能留正文。
 func TestChatPayloadAbsentOnNormalChat(t *testing.T) {
 	backend := newFakeBackend(t)
-	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+	handler, events := newGatewayWithJournal(t, backend, "", later())
 
 	postChat(t, handler, `{"model":"glm-5.3","messages":[{"role":"user","content":"今天天气怎么样"}]}`)
 
-	event := readLastChatEvent(t, journalPath)
+	event := readLastChatEvent(t, events)
 	if event.RequestText != "" || event.ResponseText != "" {
 		t.Errorf("正常对话不应留存正文，得到 req=%q resp=%q",
 			event.RequestText, event.ResponseText)
@@ -742,11 +737,11 @@ func TestChatResponseTextStoredOnRefusal(t *testing.T) {
 	backend.chatRaw = "data: {\"id\":\"1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"抱歉，我不能提供这个内容\"},\"finish_reason\":\"stop\"}]}\n" +
 		"data: {\"id\":\"1\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":8,\"total_tokens\":13}}\n" +
 		"data: [DONE]\n"
-	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+	handler, events := newGatewayWithJournal(t, backend, "", later())
 
 	postChat(t, handler, `{"model":"glm-5.3","messages":[{"role":"user","content":"随便问点什么"}]}`)
 
-	event := readLastChatEvent(t, journalPath)
+	event := readLastChatEvent(t, events)
 	if !event.Refused {
 		t.Fatal("应判定为疑似拒答")
 	}
@@ -761,11 +756,11 @@ func TestChatRateLimitRecorded(t *testing.T) {
 	backend := newFakeBackend(t)
 	backend.chatStatus = http.StatusTooManyRequests
 	backend.chatRaw = `{"code":6004,"msg":"您的使用量已超出频率限制，将在 2026-10-14 23:13:09 UTC+8 重置，您也可以切换其他模型继续使用。","requestId":"db3fcb46"}`
-	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+	handler, events := newGatewayWithJournal(t, backend, "", later())
 
 	postChat(t, handler, `{"model":"hy3","messages":[{"role":"user","content":"在吗"}]}`)
 
-	event := readLastChatEvent(t, journalPath)
+	event := readLastChatEvent(t, events)
 	if !event.RateLimited {
 		t.Error("6004 应记为限流")
 	}
@@ -790,11 +785,11 @@ func TestChatRateLimitWithoutResetTime(t *testing.T) {
 	backend := newFakeBackend(t)
 	backend.chatStatus = http.StatusTooManyRequests
 	backend.chatRaw = `{"code":6004,"msg":"太频繁了，请稍后再试"}`
-	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+	handler, events := newGatewayWithJournal(t, backend, "", later())
 
 	postChat(t, handler, `{"model":"hy3","messages":[{"role":"user","content":"hi"}]}`)
 
-	event := readLastChatEvent(t, journalPath)
+	event := readLastChatEvent(t, events)
 	if !event.RateLimited {
 		t.Error("6004 仍应识别为限流")
 	}
@@ -808,7 +803,7 @@ func TestChatRateLimitWithoutResetTime(t *testing.T) {
 func TestChatNetworkFailureRecorded(t *testing.T) {
 	backend := newFakeBackend(t)
 	// 起一个立即关闭连接的假后端，模拟网络失败。
-	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+	handler, events := newGatewayWithJournal(t, backend, "", later())
 	backend.server.Close() // 关掉监听，让连接直接失败
 
 	recorder := postChat(t, handler, `{"model":"hy3","messages":[{"role":"user","content":"这条必须被记下来"}]}`)
@@ -816,7 +811,7 @@ func TestChatNetworkFailureRecorded(t *testing.T) {
 	if recorder.Code == http.StatusOK {
 		t.Error("连接失败不该返回 200")
 	}
-	event := readLastChatEvent(t, journalPath)
+	event := readLastChatEvent(t, events)
 	if event.RequestText == "" {
 		t.Error("网络失败也应留存请求正文，否则抽屉里看不到发了什么")
 	}
@@ -833,11 +828,11 @@ func TestChatNonPolicyErrorKeepsPayload(t *testing.T) {
 	backend := newFakeBackend(t)
 	backend.chatStatus = http.StatusBadRequest
 	backend.chatRaw = `{"code":40001,"msg":"模型不存在"}`
-	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+	handler, events := newGatewayWithJournal(t, backend, "", later())
 
 	postChat(t, handler, `{"model":"no-such-model","messages":[{"role":"user","content":"测试模型不存在"}]}`)
 
-	event := readLastChatEvent(t, journalPath)
+	event := readLastChatEvent(t, events)
 	if event.Blocked {
 		t.Error("普通错误不算内容拦截")
 	}
@@ -851,11 +846,11 @@ func TestChatAggregateFailureKeepsPayload(t *testing.T) {
 	backend := newFakeBackend(t)
 	// 返回 200 但单行超过 sseScanLimit，让 scanner 报错、聚合失败。
 	backend.chatRaw = "data: " + strings.Repeat("x", (1<<20)+10) + "\n"
-	handler, journalPath := newGatewayWithJournal(t, backend, "", later())
+	handler, events := newGatewayWithJournal(t, backend, "", later())
 
 	postChat(t, handler, `{"model":"hy3","messages":[{"role":"user","content":"聚合失败也要能复盘"}]}`)
 
-	event := readLastChatEvent(t, journalPath)
+	event := readLastChatEvent(t, events)
 	if event.RequestText == "" {
 		t.Error("聚合失败也应留请求正文")
 	}
