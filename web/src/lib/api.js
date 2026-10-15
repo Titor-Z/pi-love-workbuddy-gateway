@@ -66,8 +66,11 @@ export const api = {
   usage: (days = 14) => request("GET", `/api/usage?days=${days}`),
   models: () => request("GET", "/api/models"),
   events: (limit = 200) => request("GET", `/api/events?limit=${limit}`),
-  promotions: () => request("GET", "/api/promotions"),
-  savePromotions: (promotions) => request("PUT", "/api/promotions", { promotions }),
+  overrides: () => request("GET", "/api/overrides"),
+  saveOverrides: (models) => request("PUT", "/api/overrides", { models }),
+  // 只有客户端模式有：网关自己就是权威。
+  overridesSync: () => request("GET", "/api/overrides/sync"),
+  syncOverrides: (prefer) => request("POST", "/api/overrides/sync", prefer ? { prefer } : {}),
   settings: () => request("GET", "/api/settings"),
   saveSettings: (settings) => request("PUT", "/api/settings", settings),
   relay: () => request("GET", "/api/relay"),

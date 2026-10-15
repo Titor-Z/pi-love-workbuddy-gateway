@@ -21,8 +21,8 @@ func TestPathsFollowXDG(t *testing.T) {
 	if got := Dir(); got != wantDir {
 		t.Errorf("Dir = %q，期望 %q", got, wantDir)
 	}
-	if got, want := PromotionsPath(), filepath.Join(wantDir, PromotionsFileName); got != want {
-		t.Errorf("PromotionsPath = %q，期望 %q", got, want)
+	if got, want := ModelOverridesPath(), filepath.Join(wantDir, ModelOverridesFileName); got != want {
+		t.Errorf("ModelOverridesPath = %q，期望 %q", got, want)
 	}
 	if got, want := LogPath(), filepath.Join(wantDir, LogFileName); got != want {
 		t.Errorf("LogPath = %q，期望 %q", got, want)

@@ -98,7 +98,14 @@ func runServe(cfg *config.Config, args []string) error {
 	}
 	defer logger.Close()
 
-	promotions, err := catalog.LoadPromotions(appdir.PromotionsPath())
+	// 模型覆盖表：别名、免费截止、备注、隐藏、思考档位。
+	// 旧版 promotions.json 在这里一次性升级（成功才改名 .migrated）。
+	if migrated, err := catalog.MigratePromotions(appdir.PromotionsPath(), appdir.ModelOverridesPath()); err != nil {
+		logger.Printf("⚠️ 升级旧促销配置失败（不影响运行）：%v", err)
+	} else if migrated {
+		logger.Printf("已把旧促销配置升级为模型覆盖表：%s", appdir.ModelOverridesPath())
+	}
+	overrides, err := catalog.OpenStore(appdir.ModelOverridesPath())
 	if err != nil {
 		return err
 	}
@@ -121,7 +128,7 @@ func runServe(cfg *config.Config, args []string) error {
 
 	// 两种模式的差别只在这里：谁去取数据。
 	// 之后的一切（网关 Handler、面板、HTTP 服务）完全一样。
-	parts, err := buildRuntime(cfg, logger)
+	parts, err := buildRuntime(cfg, logger, overrides)
 	if err != nil {
 		return err
 	}
@@ -137,38 +144,39 @@ func runServe(cfg *config.Config, args []string) error {
 	if cfg.Mode == config.ModeClient {
 		maxConcurrent = 0
 	}
-	gatewayHandler := gateway.NewServer(cfg, parts.credential, parts.backend, promotions, logger, events, maxConcurrent)
+	gatewayHandler := gateway.NewServer(cfg, parts.credential, parts.backend, overrides, logger, events, maxConcurrent)
 	control := panel.NewControl()
 	console, err := panel.New(panel.Deps{
-		Version:        version,
-		StartedAt:      startedAt,
-		Mode:           cfg.Mode,
-		RelayAddr:      cfg.RelayAddr,
-		RelayEnabled:   parts.relay != nil,
-		TLSFingerprint: parts.fingerprint,
-		PSK:            parts.psk,
-		PairingCodes:   parts.pairingCodes,
-		PSKHint:        parts.pskHint(),
-		Devices:        parts.devices,
-		Device:         parts.device,
-		Syncer:         parts.syncer,
-		PairingErr:     parts.pairingErr,
-		PairingAddress: parts.address,
-		AuthFile:       parts.authFile,
-		ListenAddr:     cfg.ListenAddr,
-		ConsoleAddr:    cfg.ConsoleAddr,
-		LogPath:        appdir.LogPath(),
-		JournalPath:    events.Path(),
-		PromotionsPath: appdir.PromotionsPath(),
-		SettingsPath:   appdir.SettingsPath(),
-		Credential:     parts.credential,
-		Upstream:       parts.backend,
-		Billing:        parts.billing,
-		Promotions:     promotions,
-		Journal:        events,
-		Settings:       preferences,
-		Logger:         logger,
-		Control:        control,
+		Version:         version,
+		StartedAt:       startedAt,
+		Mode:            cfg.Mode,
+		RelayAddr:       cfg.RelayAddr,
+		RelayEnabled:    parts.relay != nil,
+		TLSFingerprint:  parts.fingerprint,
+		PSK:             parts.psk,
+		PairingCodes:    parts.pairingCodes,
+		PSKHint:         parts.pskHint(),
+		Devices:         parts.devices,
+		Device:          parts.device,
+		Syncer:          parts.syncer,
+		PairingErr:      parts.pairingErr,
+		PairingAddress:  parts.address,
+		AuthFile:        parts.authFile,
+		ListenAddr:      cfg.ListenAddr,
+		ConsoleAddr:     cfg.ConsoleAddr,
+		LogPath:         appdir.LogPath(),
+		JournalPath:     events.Path(),
+		OverridesPath:   appdir.ModelOverridesPath(),
+		SettingsPath:    appdir.SettingsPath(),
+		Credential:      parts.credential,
+		Upstream:        parts.backend,
+		Billing:         parts.billing,
+		Overrides:       overrides,
+		OverridesSyncer: parts.overridesSyncer,
+		Journal:         events,
+		Settings:        preferences,
+		Logger:          logger,
+		Control:         control,
 	})
 	if err != nil {
 		return err

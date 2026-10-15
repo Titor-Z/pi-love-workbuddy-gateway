@@ -41,19 +41,19 @@ func newTestPanel(t *testing.T) (*Panel, *Control, *journal.Journal) {
 
 	control := NewControl()
 	console, err := New(Deps{
-		Version:        "test",
-		StartedAt:      time.Now(),
-		AuthFile:       filepath.Join(dir, "auth.info"),
-		ListenAddr:     "127.0.0.1:8788",
-		LogPath:        filepath.Join(dir, "gateway.log"),
-		JournalPath:    filepath.Join(dir, "events.jsonl"),
-		PromotionsPath: filepath.Join(dir, "promotions.json"),
-		SettingsPath:   filepath.Join(dir, "settings.json"),
-		Promotions:     &catalog.Promotions{},
-		Journal:        events,
-		Settings:       preferences,
-		Logger:         logger,
-		Control:        control,
+		Version:       "test",
+		StartedAt:     time.Now(),
+		AuthFile:      filepath.Join(dir, "auth.info"),
+		ListenAddr:    "127.0.0.1:8788",
+		LogPath:       filepath.Join(dir, "gateway.log"),
+		JournalPath:   filepath.Join(dir, "events.jsonl"),
+		OverridesPath: filepath.Join(dir, "model-overrides.json"),
+		SettingsPath:  filepath.Join(dir, "settings.json"),
+		Overrides:     mustStore(t, dir),
+		Journal:       events,
+		Settings:      preferences,
+		Logger:        logger,
+		Control:       control,
 	})
 	if err != nil {
 		t.Fatalf("建面板失败：%v", err)
@@ -107,7 +107,7 @@ func TestAPIRejectsMissingNonce(t *testing.T) {
 	console, _, _ := newTestPanel(t)
 
 	for _, target := range []string{"/api/status", "/api/billing", "/api/usage",
-		"/api/models", "/api/events", "/api/promotions"} {
+		"/api/models", "/api/events", "/api/overrides"} {
 		request := httptest.NewRequest(http.MethodGet, target, nil)
 		recorder := httptest.NewRecorder()
 		console.Handler().ServeHTTP(recorder, request)
@@ -126,8 +126,8 @@ func TestAPIRejectsMissingNonce(t *testing.T) {
 func TestAPIRejectsForeignOriginOnWrite(t *testing.T) {
 	console, _, _ := newTestPanel(t)
 
-	recorder := call(t, console, http.MethodPut, "/api/promotions",
-		map[string]any{"promotions": map[string]any{}},
+	recorder := call(t, console, http.MethodPut, "/api/overrides",
+		map[string]any{"models": map[string]any{}},
 		map[string]string{"Origin": "https://evil.example"})
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("跨站写请求状态码 = %d，想要 403", recorder.Code)
@@ -305,62 +305,71 @@ func TestUsageEndpointReadsJournal(t *testing.T) {
 	}
 }
 
-// TestPromotionsRoundTrip 覆盖读取、写入、以及写完之后立刻生效。
-func TestPromotionsRoundTrip(t *testing.T) {
+// TestOverridesRoundTrip 覆盖读取、写入、以及写完之后立刻生效。
+func TestOverridesRoundTrip(t *testing.T) {
 	console, _, _ := newTestPanel(t)
 
-	// 文件还不存在时要给出空对象，而不是报错——首次使用就是这个状态。
-	recorder := call(t, console, http.MethodGet, "/api/promotions", nil, nil)
+	// 文件还不存在时要给出空表，而不是报错——首次使用就是这个状态。
+	recorder := call(t, console, http.MethodGet, "/api/overrides", nil, nil)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("首次读取状态码 = %d，想要 200", recorder.Code)
 	}
-	if !strings.Contains(recorder.Body.String(), `"promotions":{}`) {
-		t.Fatalf("首次读取应返回空对象：%s", recorder.Body.String())
+	if !strings.Contains(recorder.Body.String(), `"models":{}`) {
+		t.Fatalf("首次读取应返回空表：%s", recorder.Body.String())
 	}
 
-	payload := map[string]any{"promotions": map[string]any{
-		"glm-5.3": map[string]any{"free_until": "2026-10-31", "note": "限时免费"},
+	payload := map[string]any{"models": map[string]any{
+		"glm-5.3": map[string]any{"alias": "主力", "free_until": "2026-10-31", "note": "限时免费"},
 	}}
-	recorder = call(t, console, http.MethodPut, "/api/promotions", payload, nil)
+	recorder = call(t, console, http.MethodPut, "/api/overrides", payload, nil)
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("写入状态码 = %d，想要 200：%s", recorder.Code, recorder.Body.String())
 	}
 
-	// 面板内存里的配置要立刻更新，不能等重启。
-	if _, found := console.promotions().Lookup("glm-5.3"); !found {
-		t.Fatal("写完之后面板没有加载到新配置")
+	// 面板内存里的表要立刻更新，不能等重启。
+	entry, found := console.overrides().Lookup("glm-5.3")
+	if !found {
+		t.Fatal("写完之后面板没有加载到新表")
+	}
+	if entry.Alias != "主力" {
+		t.Errorf("别名没写进去：%+v", entry)
+	}
+	// revision 要递增，改动要带上作者——这是日后三方合并的依据。
+	if console.overrides().Revision != 1 {
+		t.Errorf("revision = %d，期望 1", console.overrides().Revision)
 	}
 
 	// 再读一次，确认确实落了盘。
-	recorder = call(t, console, http.MethodGet, "/api/promotions", nil, nil)
+	recorder = call(t, console, http.MethodGet, "/api/overrides", nil, nil)
 	if !strings.Contains(recorder.Body.String(), "限时免费") {
 		t.Fatalf("回读没有拿到刚写的内容：%s", recorder.Body.String())
 	}
 }
 
-// TestPromotionsRejectsBadPayload 确认坏数据不会落盘。
-func TestPromotionsRejectsBadPayload(t *testing.T) {
+// TestOverridesRejectsBadPayload 确认坏数据不会落盘。
+func TestOverridesRejectsBadPayload(t *testing.T) {
 	console, _, _ := newTestPanel(t)
 
 	cases := map[string]string{
-		"不是对象":    `[]`,
-		"多出未知字段":  `{"promotions":{},"extra":1}`,
-		"促销值不是对象": `{"promotions":{"glm-5.3":"免费"}}`,
+		"不是对象":     `[]`,
+		"多出未知字段":   `{"models":{},"extra":1}`,
+		"覆盖值不是对象":  `{"models":{"glm-5.3":"免费"}}`,
+		"思考档位键拼错了": `{"models":{"glm-5.3":{"thinking_level_map":{"hgih":"high"}}}}`,
 	}
 	for name, body := range cases {
-		request := httptest.NewRequest(http.MethodPut, "/api/promotions", strings.NewReader(body))
+		request := httptest.NewRequest(http.MethodPut, "/api/overrides", strings.NewReader(body))
 		request.Header.Set(nonceHeader, console.nonce)
 		recorder := httptest.NewRecorder()
 		console.Handler().ServeHTTP(recorder, request)
 
 		if recorder.Code != http.StatusBadRequest {
-			t.Errorf("%s：状态码 = %d，想要 400", name, recorder.Code)
+			t.Errorf("%s：状态码 = %d，想要 400（%s）", name, recorder.Code, recorder.Body.String())
 		}
 	}
 
-	// 被拒绝之后，内存里的配置不应被改动。
-	if _, found := console.promotions().Lookup("glm-5.3"); found {
-		t.Fatal("非法请求污染了内存中的配置")
+	// 被拒绝之后，内存里的表不应被改动。
+	if _, found := console.overrides().Lookup("glm-5.3"); found {
+		t.Fatal("非法请求污染了内存中的表")
 	}
 }
 
@@ -436,4 +445,14 @@ func TestStaticRejectsPost(t *testing.T) {
 	if recorder.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("状态码 = %d，想要 405", recorder.Code)
 	}
+}
+
+// mustStore 建一个落在临时目录里的覆盖表 Store。
+func mustStore(t *testing.T, dir string) *catalog.Store {
+	t.Helper()
+	store, err := catalog.OpenStore(filepath.Join(dir, "model-overrides.json"))
+	if err != nil {
+		t.Fatalf("建覆盖表 Store 失败：%v", err)
+	}
+	return store
 }

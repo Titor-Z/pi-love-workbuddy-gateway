@@ -14,6 +14,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/appdir"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/atrest"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/billing"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/config"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
@@ -22,6 +23,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/overridessync"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/paircode"
 	pairingPkg "github.com/Titor-Z/pi-love-workbuddy-gateway/internal/pairing"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/panel"
@@ -62,6 +64,13 @@ type runtime struct {
 	// syncer 是客户端模式的凭证同步器；网关模式为 nil。
 	syncer *credentialsync.Syncer
 
+	// overrides 是模型覆盖表。两种模式都有：客户端本机也要能编辑，
+	// 只是它那份要与网关对齐（见 overridesSyncer）。
+	overrides *catalog.Store
+	// overridesSyncer 是客户端模式的覆盖表同步器；网关模式为 nil
+	// （网关自己就是权威，没有可同步的对象）。
+	overridesSyncer *overridessync.Syncer
+
 	// pairingErr 非空表示客户端模式尚未配对。此时没有 backend，
 	// 控制台照常可用（配对就在那里完成），其余请求一律明确拒绝。
 	pairingErr error
@@ -83,7 +92,8 @@ func (r *runtime) pskHint() string {
 
 // buildRuntime 按模式装配运行时。两条路的最大共同点是：
 // 都产出一个 gateway.Backend，之后的一切对它的来源完全无感。
-func buildRuntime(cfg *config.Config, logger *logging.Logger) (*runtime, error) {
+func buildRuntime(cfg *config.Config, logger *logging.Logger,
+	overrides *catalog.Store) (*runtime, error) {
 	device, err := loadDevice(cfg)
 	if err != nil {
 		return nil, err
@@ -92,9 +102,9 @@ func buildRuntime(cfg *config.Config, logger *logging.Logger) (*runtime, error) 
 		// 客户端模式即使还没配对也要能起来：控制台是唯一能完成配对的
 		// 地方（密钥与指纹都在网页上填、在网页上比对），
 		// 起不来的话用户就没有入口了。
-		return buildClientRuntime(cfg, device)
+		return buildClientRuntime(cfg, device, overrides)
 	}
-	return buildGatewayRuntime(cfg, logger, device)
+	return buildGatewayRuntime(cfg, logger, device, overrides)
 }
 
 // loadDevice 载入本设备身份。
@@ -111,7 +121,7 @@ func loadDevice(cfg *config.Config) (*identity.Device, error) {
 
 // buildGatewayRuntime 装配网关模式：持有凭证、直连后端。
 func buildGatewayRuntime(cfg *config.Config, logger *logging.Logger,
-	device *identity.Device) (*runtime, error) {
+	device *identity.Device, overrides *catalog.Store) (*runtime, error) {
 
 	authFile, err := credential.Locate("")
 	if err != nil {
@@ -129,6 +139,7 @@ func buildGatewayRuntime(cfg *config.Config, logger *logging.Logger,
 		authFile:   cred.Path(),
 		keyID:      cipher.KeyID(),
 		device:     device,
+		overrides:  overrides,
 	}
 	// 网关模式一律开放转发端口：多设备共享是这个模式存在的理由，
 	// 没有开关可言。想不让别人连，把 -addr 绑回 127.0.0.1 之外的
@@ -140,7 +151,8 @@ func buildGatewayRuntime(cfg *config.Config, logger *logging.Logger,
 }
 
 // buildClientRuntime 装配客户端模式：把请求转发给网关。
-func buildClientRuntime(cfg *config.Config, device *identity.Device) (*runtime, error) {
+func buildClientRuntime(cfg *config.Config, device *identity.Device,
+	overrides *catalog.Store) (*runtime, error) {
 	pairing, err := loadPairing(cfg)
 	if err != nil {
 		if errors.Is(err, errNeedsPairing) {
@@ -150,6 +162,7 @@ func buildClientRuntime(cfg *config.Config, device *identity.Device) (*runtime, 
 				device:     device,
 				pairingErr: err,
 				address:    pairingPkg.NormalizeAddress(cfg.GatewayAddress),
+				overrides:  overrides,
 			}, nil
 		}
 		return nil, err
@@ -176,6 +189,13 @@ func buildClientRuntime(cfg *config.Config, device *identity.Device) (*runtime, 
 		psk:         pairing.PSK,
 		fingerprint: pairing.Fingerprint,
 		syncer:      syncer,
+		overrides:   overrides,
+		overridesSyncer: &overridessync.Syncer{
+			Client:   backend,
+			Local:    overrides,
+			BasePath: appdir.ModelOverridesBasePath(),
+			Device:   device.ID,
+		},
 	}, nil
 }
 
@@ -350,7 +370,7 @@ func (r *runtime) enableRelay(logger *logging.Logger) error {
 	r.syncEpoch = newCredentialCounter(appdir.CredentialEpochPath())
 	// 凭证同步是独立开关，与「开放转发服务」并列，默认关。
 	r.syncAllowed = panel.ReadSyncPreference()
-	deps := relay.Deps{PSK: psk, Devices: registry, Version: version}
+	deps := relay.Deps{PSK: psk, Devices: registry, Version: version, Overrides: r.overrides}
 	if r.syncAllowed {
 		deps.CredentialSource = &credentialExporter{
 			cred:  r.credential,

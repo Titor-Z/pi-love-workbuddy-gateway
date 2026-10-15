@@ -32,12 +32,13 @@ type piProvider struct {
 // piModel 是 pi 里的一个模型条目。name 里带着费用标记，
 // pi 的模型选择器会原样展示，用户一眼能看出哪个免费。
 type piModel struct {
-	ID            string   `json:"id"`
-	Name          string   `json:"name,omitempty"`
-	Reasoning     bool     `json:"reasoning,omitempty"`
-	Input         []string `json:"input,omitempty"`
-	ContextWindow int      `json:"contextWindow,omitempty"`
-	MaxTokens     int      `json:"maxTokens,omitempty"`
+	ID               string             `json:"id"`
+	Name             string             `json:"name,omitempty"`
+	Reasoning        bool               `json:"reasoning,omitempty"`
+	Input            []string           `json:"input,omitempty"`
+	ThinkingLevelMap map[string]*string `json:"thinkingLevelMap,omitempty"`
+	ContextWindow    int                `json:"contextWindow,omitempty"`
+	MaxTokens        int                `json:"maxTokens,omitempty"`
 }
 
 // WritePiConfig 输出一份可直接重定向到 ~/.pi/agent/models.json 的配置。
@@ -45,12 +46,13 @@ func WritePiConfig(out io.Writer, entries []Entry, baseURL, apiKey string) error
 	models := make([]piModel, 0, len(entries))
 	for _, entry := range entries {
 		models = append(models, piModel{
-			ID:            entry.Model.ID,
-			Name:          entry.DisplayName(),
-			Reasoning:     entry.Model.SupportsThinking,
-			Input:         piInputKinds(entry),
-			ContextWindow: entry.Model.MaxInputTokens,
-			MaxTokens:     entry.Model.MaxOutputTokens,
+			ID:               entry.Model.ID,
+			Name:             entry.DisplayName(),
+			Reasoning:        entry.Model.SupportsThinking,
+			Input:            piInputKinds(entry),
+			ThinkingLevelMap: entry.Thinking,
+			ContextWindow:    entry.Model.MaxInputTokens,
+			MaxTokens:        entry.Model.MaxOutputTokens,
 		})
 	}
 	if apiKey == "" {

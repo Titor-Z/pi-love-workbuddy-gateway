@@ -24,12 +24,12 @@ const maxErrorBody = 64 << 10
 
 // Server 是本地网关。它不持有任何状态，所有请求都转发到后端的实时接口。
 type Server struct {
-	cfg        *config.Config
-	cred       *credential.Manager
-	up         Backend
-	promotions *catalog.Promotions
-	logger     *logging.Logger
-	journal    *journal.Journal // 允许为 nil（测试场景）
+	cfg       *config.Config
+	cred      *credential.Manager
+	up        Backend
+	overrides *catalog.Store
+	logger    *logging.Logger
+	journal   *journal.Journal // 允许为 nil（测试场景）
 
 	// gate 是并发闸门。它属于 Server 而不是 Backend：
 	// 网关的两个入口（本机 API 与局域网 relay）都挂同一个 Handler，
@@ -44,9 +44,9 @@ type Server struct {
 // 因为多条入口（本机直连、局域网客户端）最终都归到同一个 WorkBuddy 账号上，
 // 并发翻倍会让本就存在的 429 提前到来。
 func NewServer(cfg *config.Config, cred *credential.Manager, up Backend,
-	promotions *catalog.Promotions, logger *logging.Logger, events *journal.Journal,
+	overrides *catalog.Store, logger *logging.Logger, events *journal.Journal,
 	maxConcurrent int) *Server {
-	return &Server{cfg: cfg, cred: cred, up: up, promotions: promotions,
+	return &Server{cfg: cfg, cred: cred, up: up, overrides: overrides,
 		logger: logger, journal: events, gate: NewGate(maxConcurrent)}
 }
 

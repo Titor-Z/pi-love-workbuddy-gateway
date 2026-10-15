@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relaytls"
@@ -178,9 +179,20 @@ func (c *Client) Models(ctx context.Context) ([]upstream.ModelInfo, error) {
 	var payload struct {
 		Data []struct {
 			ID string `json:"id"`
-			// WorkBuddy 扩展对象里有倍率与促销信息，用标记时要读它。
+			// WorkBuddy 扩展对象里有倍率与促销信息，
+			// 而 source 是未经加工的原始字段——客户端要靠它重建 ModelInfo。
 			WorkBuddy struct {
-				Label string `json:"label"`
+				Source struct {
+					Name          string   `json:"name"`
+					Credits       string   `json:"credits"`
+					Tags          []string `json:"tags"`
+					ContextWindow int      `json:"context_window"`
+					MaxTokens     int      `json:"max_tokens"`
+					Images        bool     `json:"images"`
+					Tools         bool     `json:"tools"`
+					Thinking      bool     `json:"thinking"`
+					Efforts       []string `json:"efforts"`
+				} `json:"source"`
 			} `json:"workbuddy"`
 		} `json:"data"`
 	}
@@ -192,9 +204,88 @@ func (c *Client) Models(ctx context.Context) ([]upstream.ModelInfo, error) {
 		if item.ID == "" {
 			continue
 		}
-		models = append(models, upstream.ModelInfo{ID: item.ID})
+		source := item.WorkBuddy.Source
+		models = append(models, upstream.ModelInfo{
+			ID:               item.ID,
+			Name:             source.Name,
+			Credits:          source.Credits,
+			MaxInputTokens:   source.ContextWindow,
+			MaxOutputTokens:  source.MaxTokens,
+			SupportsImages:   source.Images,
+			SupportsToolCall: source.Tools,
+			SupportsThinking: source.Thinking,
+			Efforts:          source.Efforts,
+			Tags:             source.Tags,
+		})
 	}
 	return models, nil
+}
+
+// FetchModelOverrides 拉取网关权威那一份模型覆盖表。
+func (c *Client) FetchModelOverrides(ctx context.Context) (*catalog.Overrides, error) {
+	request, err := c.newRequest(ctx, http.MethodGet, overridesPath, nil)
+	if err != nil {
+		return nil, err
+	}
+	response, err := c.http.Do(request)
+	if err != nil {
+		return nil, translateError(err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxOverridesBody))
+	if err != nil {
+		return nil, translateError(err)
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, errorsFromBody(response.StatusCode, raw)
+	}
+	table, err := catalog.LoadOverridesFromJSON(raw)
+	if err != nil {
+		return nil, fmt.Errorf("网关返回的模型覆盖表不是合法 JSON：%w", err)
+	}
+	return table, nil
+}
+
+// PushModelOverrides 把合并后的覆盖表推给网关。
+//
+// baseRevision 是这次合并所依据的版本；网关那边的版本已经变了就返回
+// catalog.ErrStaleRevision，调用方要重新拉取、重新合并。
+func (c *Client) PushModelOverrides(ctx context.Context, baseRevision int64,
+	models map[string]catalog.Override) (*catalog.Overrides, error) {
+
+	payload, err := json.Marshal(map[string]any{
+		"base_revision": baseRevision,
+		"models":        models,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("编码模型覆盖表失败：%w", err)
+	}
+	request, err := c.newRequest(ctx, http.MethodPut, overridesPath, bytes.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Content-Type", "application/json")
+	response, err := c.http.Do(request)
+	if err != nil {
+		return nil, translateError(err)
+	}
+	defer response.Body.Close()
+	raw, err := io.ReadAll(io.LimitReader(response.Body, maxOverridesBody))
+	if err != nil {
+		return nil, translateError(err)
+	}
+	if response.StatusCode == http.StatusConflict {
+		// 409 是「你先重新拉一次」而不是网络故障，单独还原成可判断的错误。
+		return nil, catalog.ErrStaleRevision
+	}
+	if response.StatusCode != http.StatusOK {
+		return nil, errorsFromBody(response.StatusCode, raw)
+	}
+	table, err := catalog.LoadOverridesFromJSON(raw)
+	if err != nil {
+		return nil, fmt.Errorf("网关返回的模型覆盖表不是合法 JSON：%w", err)
+	}
+	return table, nil
 }
 
 // Ping 确认网关是否可达且协议版本一致。UI 用它显示「网关在线」。
@@ -259,6 +350,10 @@ func errorsFromBody(code int, body []byte) error {
 
 // maxErrorBody 是读取错误响应体的上限，避免异常响应撑爆内存。
 const maxErrorBody = 64 << 10
+
+// maxOverridesBody 是覆盖表响应的上限。覆盖表是人工维护的小文件，
+// 1MB 已经远远够用；超出说明对方不是我们认识的网关。
+const maxOverridesBody = 1 << 20
 
 // truncate 截断过长的错误正文。
 func truncate(text string) string {

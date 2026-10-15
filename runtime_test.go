@@ -10,6 +10,7 @@ import (
 
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/appdir"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/atrest"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/config"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
@@ -64,7 +65,11 @@ func TestClientRuntimeHasNoCredential(t *testing.T) {
 		t.Fatalf("构造日志器失败：%v", err)
 	}
 	cfg := &config.Config{Mode: config.ModeClient, ListenAddr: "127.0.0.1:1"}
-	parts, err := buildRuntime(cfg, logger)
+	store, err := catalog.OpenStore(appdir.ModelOverridesPath())
+	if err != nil {
+		t.Fatalf("建覆盖表 Store 失败：%v", err)
+	}
+	parts, err := buildRuntime(cfg, logger, store)
 	if err != nil {
 		t.Fatalf("装配失败：%v", err)
 	}

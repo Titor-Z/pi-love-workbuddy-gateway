@@ -1,0 +1,20 @@
+{
+  "name": "pi-workbuddy",
+  "version": "0.1.0",
+  "description": "pi 接入 pi-love-workbuddy-gateway：模型目录与思考档位每次打开 /model 自动刷新，pi 侧不用再手写 models.json",
+  "keywords": ["pi-package", "pi", "workbuddy"],
+  "license": "MIT",
+  "type": "module",
+  "pi": {
+    "extensions": ["./index.ts"]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "files": ["index.ts", "README.md"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Titor-Z/pi-love-workbuddy-gateway.git",
+    "directory": "packages/pi-workbuddy"
+  }
+}

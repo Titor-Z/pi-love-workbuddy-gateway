@@ -2,10 +2,8 @@ package panel
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"time"
 
@@ -14,17 +12,17 @@ import (
 
 // statusResponse 是概览页顶部的状态数据。
 type statusResponse struct {
-	Version        string    `json:"version"`
-	StartedAt      time.Time `json:"started_at"`
-	UptimeSeconds  int64     `json:"uptime_seconds"`
-	PID            int       `json:"pid"`
-	ListenAddr     string    `json:"listen_addr"`
-	ConsoleAddr    string    `json:"console_addr"`
-	AuthFile       string    `json:"auth_file"`
-	LogPath        string    `json:"log_path"`
-	JournalPath    string    `json:"journal_path"`
-	PromotionsPath string    `json:"promotions_path"`
-	Mode           string    `json:"mode"`
+	Version       string    `json:"version"`
+	StartedAt     time.Time `json:"started_at"`
+	UptimeSeconds int64     `json:"uptime_seconds"`
+	PID           int       `json:"pid"`
+	ListenAddr    string    `json:"listen_addr"`
+	ConsoleAddr   string    `json:"console_addr"`
+	AuthFile      string    `json:"auth_file"`
+	LogPath       string    `json:"log_path"`
+	JournalPath   string    `json:"journal_path"`
+	OverridesPath string    `json:"overrides_path"`
+	Mode          string    `json:"mode"`
 	// Paired 为假时前端应显示配对表单而不是「连不上网关」。
 	Paired         bool           `json:"paired"`
 	PairingAddress string         `json:"pairing_address,omitempty"`
@@ -61,7 +59,7 @@ func (p *Panel) handleStatus(w http.ResponseWriter, _ *http.Request) {
 		AuthFile:       p.deps.AuthFile,
 		LogPath:        p.deps.LogPath,
 		JournalPath:    p.deps.JournalPath,
-		PromotionsPath: p.deps.PromotionsPath,
+		OverridesPath:  p.deps.OverridesPath,
 		Account:        account,
 	})
 }
@@ -125,7 +123,8 @@ func (p *Panel) handleBilling(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
-// modelEntry 是模型页的一行。
+// modelEntry 是模型页的一行。既有合成后的标签，也有覆盖项原文——
+// 编辑页要拿覆盖项回填表单。
 type modelEntry struct {
 	ID          string   `json:"id"`
 	Name        string   `json:"name"`
@@ -140,6 +139,13 @@ type modelEntry struct {
 	Images      bool     `json:"images"`
 	Thinking    bool     `json:"thinking"`
 	Efforts     []string `json:"efforts,omitempty"`
+
+	// 以下是用户写的覆盖项（回填编辑表单用）。
+	Alias            string             `json:"alias,omitempty"`
+	Hidden           bool               `json:"hidden,omitempty"`
+	ThinkingLevelMap map[string]*string `json:"thinking_level_map,omitempty"`
+	UpdatedAt        string             `json:"updated_at,omitempty"`
+	UpdatedBy        string             `json:"updated_by,omitempty"`
 }
 
 // handleModels 返回实时模型目录，带费用标记。
@@ -153,23 +159,30 @@ func (p *Panel) handleModels(w http.ResponseWriter, r *http.Request) {
 		p.fail(w, "拉取模型目录", err)
 		return
 	}
-	entries := catalog.Build(models, p.promotions())
+	// 编辑页要看得见被隐藏的模型，否则没法把它们放出来；
+	// 对外转发（/v1/models、pi 配置）才过滤。
+	entries := catalog.Build(models, p.overrides())
 	list := make([]modelEntry, 0, len(entries))
 	for _, entry := range entries {
 		list = append(list, modelEntry{
-			ID:          entry.Model.ID,
-			Name:        entry.Model.Name,
-			DisplayName: entry.DisplayName(),
-			Free:        entry.Label.Free,
-			Credits:     entry.Label.Credits,
-			Badge:       entry.Label.Badge,
-			FreeUntil:   entry.Label.FreeUntil,
-			Note:        entry.Label.Note,
-			Context:     entry.Model.MaxInputTokens,
-			MaxOutput:   entry.Model.MaxOutputTokens,
-			Images:      entry.HasImageInput(),
-			Thinking:    entry.Model.SupportsThinking,
-			Efforts:     entry.Model.Efforts,
+			ID:               entry.Model.ID,
+			Name:             entry.Model.Name,
+			DisplayName:      entry.DisplayName(),
+			Free:             entry.Label.Free,
+			Credits:          entry.Label.Credits,
+			Badge:            entry.Label.Badge,
+			FreeUntil:        entry.Label.FreeUntil,
+			Note:             entry.Label.Note,
+			Context:          entry.Model.MaxInputTokens,
+			MaxOutput:        entry.Model.MaxOutputTokens,
+			Images:           entry.HasImageInput(),
+			Thinking:         entry.Model.SupportsThinking,
+			Efforts:          entry.Model.Efforts,
+			Alias:            entry.Alias,
+			Hidden:           entry.Hidden,
+			ThinkingLevelMap: entry.Thinking,
+			UpdatedAt:        entry.UpdatedAt,
+			UpdatedBy:        entry.UpdatedBy,
 		})
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"models": list})
@@ -186,7 +199,7 @@ func (p *Panel) handlePiModels(w http.ResponseWriter, r *http.Request) {
 		p.fail(w, "生成 pi 配置", err)
 		return
 	}
-	entries := catalog.Build(models, p.promotions())
+	entries := catalog.Visible(catalog.Build(models, p.overrides()))
 
 	baseURL := "http://" + p.deps.ListenAddr + "/v1"
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
@@ -224,79 +237,59 @@ func (p *Panel) handleEvents(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"events": records})
 }
 
-// handleGetPromotions 返回促销配置文件的原文，让前端能直接编辑。
-func (p *Panel) handleGetPromotions(w http.ResponseWriter, _ *http.Request) {
-	raw, err := os.ReadFile(p.deps.PromotionsPath)
+// handleGetOverrides 返回模型覆盖表。每次从磁盘读：
+// 用户可能在编辑器外面手改了这个文件，面板不该拿内存里那份骗人。
+func (p *Panel) handleGetOverrides(w http.ResponseWriter, _ *http.Request) {
+	table, err := catalog.LoadOverrides(p.deps.OverridesPath)
 	if err != nil {
-		if os.IsNotExist(err) {
-			// 文件不存在是正常状态，返回空对象让前端从零开始填。
-			writeJSON(w, http.StatusOK, map[string]any{"promotions": map[string]any{},
-				"path": p.deps.PromotionsPath})
-			return
-		}
-		p.fail(w, "读取促销配置", err)
-		return
-	}
-	var parsed map[string]any
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		p.fail(w, "解析促销配置", fmt.Errorf("文件不是合法 JSON：%w", err))
+		p.fail(w, "读取模型覆盖表", err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"promotions": parsed, "path": p.deps.PromotionsPath,
+		"overrides": table, "path": p.deps.OverridesPath,
 	})
 }
 
-// handlePutPromotions 覆盖写入促销配置。
+// handlePutOverrides 覆盖写入模型覆盖表。
 //
-// 写入前先校验结构：这个文件坏了会让模型列表里的「免费到哪天」整片消失，
+// 写入前先校验结构：这个文件坏了会让别名、免费截止、思考档位整片失效，
 // 而用户往往是手改出错的。宁可拒绝，也不要把坏文件落盘。
-func (p *Panel) handlePutPromotions(w http.ResponseWriter, r *http.Request) {
+func (p *Panel) handlePutOverrides(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
-		Promotions map[string]catalog.Promotion `json:"promotions"`
+		Models map[string]catalog.Override `json:"models"`
 	}
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&payload); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid_request_error",
-			"促销配置格式不对："+err.Error())
+			"模型覆盖表格式不对："+err.Error())
 		return
 	}
-	if payload.Promotions == nil {
-		payload.Promotions = map[string]catalog.Promotion{}
+	next := catalog.NewOverrides()
+	next.Models = payload.Models
+	if err := next.Validate(); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
 	}
-
-	raw, err := json.MarshalIndent(payload.Promotions, "", "  ")
+	// 记一次写入：revision 递增，并给真的变了的条目打上时间与作者。
+	// 这两样是日后与另一台机器做三方合并的依据。
+	saved, err := p.deps.Overrides.Replace(next.Models, p.deviceID())
 	if err != nil {
-		p.fail(w, "序列化促销配置", err)
+		writeError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
-	raw = append(raw, '\n')
-
-	if err := os.MkdirAll(filepath.Dir(p.deps.PromotionsPath), 0o700); err != nil {
-		p.fail(w, "创建配置目录", err)
-		return
-	}
-	tmp := p.deps.PromotionsPath + ".tmp"
-	if err := os.WriteFile(tmp, raw, 0o600); err != nil {
-		p.fail(w, "写入促销配置", err)
-		return
-	}
-	if err := os.Rename(tmp, p.deps.PromotionsPath); err != nil {
-		p.fail(w, "替换促销配置", err)
-		return
-	}
-
-	// 让面板立刻看到新配置，不必等重启。
-	reloaded, err := catalog.LoadPromotions(p.deps.PromotionsPath)
-	if err != nil {
-		p.fail(w, "重新加载促销配置", err)
-		return
-	}
-	p.setPromotions(reloaded)
-	p.deps.Logger.Printf("面板更新了促销配置：%s", p.deps.PromotionsPath)
+	p.deps.Logger.Printf("面板更新了模型覆盖表（revision %d）：%s", saved.Revision, p.deps.OverridesPath)
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"promotions": payload.Promotions, "path": p.deps.PromotionsPath,
+		"overrides": saved, "path": p.deps.OverridesPath,
 	})
+}
+
+// deviceID 给出「这次改动是哪台机器做的」。
+// 设备身份为 nil（极早期启动或测试）时不编造，如实留空。
+func (p *Panel) deviceID() string {
+	if p.deps.Device == nil {
+		return ""
+	}
+	return p.deps.Device.ID
 }

@@ -103,8 +103,8 @@
             <td class="num">{status.journal_path}</td>
           </tr>
           <tr>
-            <th>促销配置</th>
-            <td class="num">{status.promotions_path}</td>
+            <th>模型覆盖表</th>
+            <td class="num">{status.overrides_path}</td>
           </tr>
           <tr>
             <th>账号标识</th>

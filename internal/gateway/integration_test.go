@@ -212,9 +212,9 @@ func newGateway(t *testing.T, backend *fakeBackend, apiKey string, expiresAt tim
 	if err != nil {
 		t.Fatalf("构造解密器失败：%v", err)
 	}
-	promotions, err := catalog.LoadPromotions("")
+	overrides, err := catalog.OpenStore(filepath.Join(t.TempDir(), "model-overrides.json"))
 	if err != nil {
-		t.Fatalf("加载促销配置失败：%v", err)
+		t.Fatalf("加载模型覆盖表失败：%v", err)
 	}
 	logger, err := logging.New(filepath.Join(t.TempDir(), "test.log"), false)
 	if err != nil {
@@ -228,7 +228,7 @@ func newGateway(t *testing.T, backend *fakeBackend, apiKey string, expiresAt tim
 		&config.Config{ListenAddr: "127.0.0.1:8788"},
 		cred,
 		upstream.NewClient(cred, backend.URL()),
-		promotions,
+		overrides,
 		logger,
 		nil, // 事件文件改为由专门的测试注入
 		0,   // 并发不限：集成测试要能并行跑
@@ -530,6 +530,16 @@ func TestModelsEndpointFiltersNonChatModels(t *testing.T) {
 				Free      bool   `json:"free"`
 				Credits   string `json:"credits"`
 				FreeUntil string `json:"free_until"`
+				Source    struct {
+					Name          string   `json:"name"`
+					Credits       string   `json:"credits"`
+					ContextWindow int      `json:"context_window"`
+					MaxTokens     int      `json:"max_tokens"`
+					Images        bool     `json:"images"`
+					Tools         bool     `json:"tools"`
+					Thinking      bool     `json:"thinking"`
+					Efforts       []string `json:"efforts"`
+				} `json:"source"`
 			} `json:"workbuddy"`
 		} `json:"data"`
 	}
@@ -553,6 +563,54 @@ func TestModelsEndpointFiltersNonChatModels(t *testing.T) {
 	}
 	if payload.Data[1].WorkBuddy.Credits != "" {
 		t.Errorf("免费模型不该再显示倍率：%q", payload.Data[1].WorkBuddy.Credits)
+	}
+
+	// 客户端模式要自己算一遍标签，所以原始字段必须也过线。
+	// 只给合成后的 "0.79x" 是不够的：那个字符串还原不回数值。
+	source := payload.Data[0].WorkBuddy.Source
+	if source.Name != "GLM-5.3" || source.Credits != "x0.79" {
+		t.Errorf("原始名与倍率不对：%+v", source)
+	}
+	if source.ContextWindow != 1000000 || source.MaxTokens != 64000 {
+		t.Errorf("上下文与最大输出不对：%+v", source)
+	}
+	if !source.Images || !source.Tools || !source.Thinking {
+		t.Errorf("能力位不对：%+v", source)
+	}
+	if len(source.Efforts) != 3 || source.Efforts[0] != "low" {
+		t.Errorf("思考档位不对：%+v", source.Efforts)
+	}
+}
+
+// TestModelsEndpointCarriesDisplayNameForPi 展示名要由网关算好再过线。
+// 拼接规则写在 Go 的 catalog 里；让 pi 插件在 TypeScript 里再实现一遍，
+// 两边早晚会不一致。
+func TestModelsEndpointCarriesDisplayNameForPi(t *testing.T) {
+	backend := newFakeBackend(t)
+	handler, _ := newGateway(t, backend, "", later())
+
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/v1/models", nil))
+
+	var payload struct {
+		Data []struct {
+			WorkBuddy struct {
+				DisplayName      string             `json:"display_name"`
+				ThinkingLevelMap map[string]*string `json:"thinking_level_map"`
+			} `json:"workbuddy"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("响应不是合法 JSON：%v", err)
+	}
+	if len(payload.Data) == 0 {
+		t.Fatal("没有模型")
+	}
+	if got := payload.Data[0].WorkBuddy.DisplayName; got != "GLM-5.3 · 0.79x" {
+		t.Errorf("展示名 = %q，期望 %q", got, "GLM-5.3 · 0.79x")
+	}
+	if got := payload.Data[1].WorkBuddy.DisplayName; got != "Hy3 · 免费" {
+		t.Errorf("免费模型展示名 = %q，期望 %q", got, "Hy3 · 免费")
 	}
 }
 
@@ -588,9 +646,9 @@ func newGatewayWithJournal(t *testing.T, backend *fakeBackend, apiKey string, ex
 	if err != nil {
 		t.Fatalf("构造解密器失败：%v", err)
 	}
-	promotions, err := catalog.LoadPromotions("")
+	overrides, err := catalog.OpenStore(filepath.Join(t.TempDir(), "model-overrides.json"))
 	if err != nil {
-		t.Fatalf("加载促销配置失败：%v", err)
+		t.Fatalf("加载模型覆盖表失败：%v", err)
 	}
 	logger, err := logging.New(filepath.Join(t.TempDir(), "test.log"), false)
 	if err != nil {
@@ -610,7 +668,7 @@ func newGatewayWithJournal(t *testing.T, backend *fakeBackend, apiKey string, ex
 		&config.Config{ListenAddr: "127.0.0.1:8788"},
 		cred,
 		upstream.NewClient(cred, backend.URL()),
-		promotions,
+		overrides,
 		logger,
 		events,
 		0, // 并发不限：集成测试要能并行跑

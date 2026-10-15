@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/billing"
@@ -76,18 +75,20 @@ type Deps struct {
 	Devices      *devices.Registry
 	Device       *identity.Device
 
-	ListenAddr     string
-	ConsoleAddr    string
-	LogPath        string
-	JournalPath    string
-	PromotionsPath string
-	SettingsPath   string
+	ListenAddr    string
+	ConsoleAddr   string
+	LogPath       string
+	JournalPath   string
+	OverridesPath string
+	SettingsPath  string
 
 	Credential *credential.Manager
 	Upstream   gateway.Backend
 	Billing    *billing.Client
-	Promotions *catalog.Promotions
+	Overrides  *catalog.Store
 	Journal    *journal.Journal
+	// OverridesSyncer 只在客户端模式非空：模型覆盖表要与网关对齐。
+	OverridesSyncer OverridesSyncer
 	// Settings 是面板可改的运行偏好（日志每页条数、保留天数）。
 	// 它不是启动时读一次的配置：清理任务与日志页都要读最新的值。
 	Settings *settings.Store
@@ -101,23 +102,12 @@ type Panel struct {
 	nonce string
 	index []byte // 已注入随机数的首页
 
-	// promotions 会被面板自己改（用户在设置页编辑），所以要用锁护住。
-	promotionsMu     sync.RWMutex
-	activePromotions *catalog.Promotions
 }
 
-// currentPromotions 取当前生效的促销配置。
-func (p *Panel) promotions() *catalog.Promotions {
-	p.promotionsMu.RLock()
-	defer p.promotionsMu.RUnlock()
-	return p.activePromotions
-}
-
-// setPromotions 在用户改完促销配置后立刻生效，不必等重启。
-func (p *Panel) setPromotions(next *catalog.Promotions) {
-	p.promotionsMu.Lock()
-	defer p.promotionsMu.Unlock()
-	p.activePromotions = next
+// overrides 取当前生效的模型覆盖表。表由 catalog.Store 共享：
+// 网关 Handler 与面板读的是同一份，面板改完 pi 那边立刻就是新的。
+func (p *Panel) overrides() *catalog.Overrides {
+	return p.deps.Overrides.Snapshot()
 }
 
 // New 构造面板。首页在启动时读入内存并注入随机数——
@@ -131,7 +121,7 @@ func New(deps Deps) (*Panel, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Panel{deps: deps, nonce: nonce, index: index, activePromotions: deps.Promotions}, nil
+	return &Panel{deps: deps, nonce: nonce, index: index}, nil
 }
 
 // Handler 返回面板的 HTTP 处理器，包含 /api/* 与静态资源。
@@ -148,8 +138,10 @@ func (p *Panel) Handler() http.Handler {
 	mux.HandleFunc("GET /api/models", p.guarded(p.handleModels))
 	mux.HandleFunc("GET /api/models/pi", p.guarded(p.handlePiModels))
 	mux.HandleFunc("GET /api/events", p.guarded(p.handleEvents))
-	mux.HandleFunc("GET /api/promotions", p.guarded(p.handleGetPromotions))
-	mux.HandleFunc("PUT /api/promotions", p.guarded(p.handlePutPromotions))
+	mux.HandleFunc("GET /api/overrides", p.guarded(p.handleGetOverrides))
+	mux.HandleFunc("PUT /api/overrides", p.guarded(p.handlePutOverrides))
+	mux.HandleFunc("GET /api/overrides/sync", p.guarded(p.handleOverridesStatus))
+	mux.HandleFunc("POST /api/overrides/sync", p.guarded(p.handleOverridesSync))
 	mux.HandleFunc("GET /api/settings", p.guarded(p.handleGetSettings))
 	mux.HandleFunc("PUT /api/settings", p.guarded(p.handlePutSettings))
 

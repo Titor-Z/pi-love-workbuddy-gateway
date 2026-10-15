@@ -15,8 +15,13 @@ import (
 // DirName 是本项目在用户配置根目录下的目录名。
 const DirName = "piloveworkbuddy"
 
-// PromotionsFileName 是促销配置的文件名。
+// PromotionsFileName 是旧版促销配置的文件名。v0.9.0 起由覆盖表取代，
+// 只作为一次性迁移的来源。
 const PromotionsFileName = "promotions.json"
+
+// ModelOverridesFileName 是模型覆盖表的文件名：别名、免费截止、备注、
+// 隐藏、思考档位。这些字段后端都不提供，只能人工维护。
+const ModelOverridesFileName = "model-overrides.json"
 
 // LogFileName 是默认日志文件名（人类读的文本日志）。
 const LogFileName = "gateway.log"
@@ -107,8 +112,18 @@ func Dir() string {
 	return filepath.Join(root, DirName)
 }
 
-// PromotionsPath 返回促销配置的默认路径。
+// PromotionsPath 返回旧版促销配置的默认路径，仅用于一次性迁移。
 func PromotionsPath() string { return join(Dir(), PromotionsFileName) }
+
+// ModelOverridesPath 返回模型覆盖表的默认路径。
+func ModelOverridesPath() string { return join(Dir(), ModelOverridesFileName) }
+
+// ModelOverridesBaseFileName 是「上次同步时网关那一份」的副本。
+// 三方合并要拿它当共同祖先——少了它就只能比时间戳，而跨机器的时钟不可靠。
+const ModelOverridesBaseFileName = "model-overrides.base.json"
+
+// ModelOverridesBasePath 返回同步基准的默认路径。
+func ModelOverridesBasePath() string { return join(Dir(), ModelOverridesBaseFileName) }
 
 // LogPath 返回日志文件的默认路径。
 func LogPath() string { return join(Dir(), LogFileName) }

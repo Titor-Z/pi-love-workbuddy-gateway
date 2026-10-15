@@ -149,28 +149,28 @@ func newLivePanel(t *testing.T) (*Panel, *fakeBackend) {
 		t.Fatalf("建偏好失败：%v", err)
 	}
 
-	promotions, err := catalog.LoadPromotions("")
+	overrides, err := catalog.OpenStore(filepath.Join(dir, "model-overrides.json"))
 	if err != nil {
-		t.Fatalf("加载促销配置失败：%v", err)
+		t.Fatalf("加载模型覆盖表失败：%v", err)
 	}
 
 	console, err := New(Deps{
-		Version:        "test",
-		StartedAt:      time.Now(),
-		AuthFile:       filepath.Join(dir, "workbuddy-desktop.info"),
-		ListenAddr:     "127.0.0.1:8788",
-		LogPath:        filepath.Join(dir, "gateway.log"),
-		JournalPath:    events.Path(),
-		PromotionsPath: filepath.Join(dir, "promotions.json"),
-		SettingsPath:   filepath.Join(dir, "settings.json"),
-		Credential:     cred,
-		Upstream:       upstream.NewClient(cred, backend.server.URL),
-		Billing:        billing.NewClient(cred, backend.server.URL),
-		Promotions:     promotions,
-		Journal:        events,
-		Settings:       preferences,
-		Logger:         logger,
-		Control:        NewControl(),
+		Version:       "test",
+		StartedAt:     time.Now(),
+		AuthFile:      filepath.Join(dir, "workbuddy-desktop.info"),
+		ListenAddr:    "127.0.0.1:8788",
+		LogPath:       filepath.Join(dir, "gateway.log"),
+		JournalPath:   events.Path(),
+		OverridesPath: filepath.Join(dir, "model-overrides.json"),
+		SettingsPath:  filepath.Join(dir, "settings.json"),
+		Credential:    cred,
+		Upstream:      upstream.NewClient(cred, backend.server.URL),
+		Billing:       billing.NewClient(cred, backend.server.URL),
+		Overrides:     overrides,
+		Journal:       events,
+		Settings:      preferences,
+		Logger:        logger,
+		Control:       NewControl(),
 	})
 	if err != nil {
 		t.Fatalf("建面板失败：%v", err)
@@ -200,7 +200,7 @@ func TestStatusEndpoint(t *testing.T) {
 	// 状态页会把这些路径显示给用户，必须如实给出，不能是空串。
 	for name, value := range map[string]string{
 		"auth_file": payload.AuthFile, "log_path": payload.LogPath,
-		"journal_path": payload.JournalPath, "promotions_path": payload.PromotionsPath,
+		"journal_path": payload.JournalPath, "overrides_path": payload.OverridesPath,
 	} {
 		if value == "" {
 			t.Errorf("%s 是空的", name)
@@ -293,6 +293,51 @@ func TestModelsEndpoint(t *testing.T) {
 	}
 	if len(backend.requests) == 0 {
 		t.Fatal("面板没有真的去请求后端")
+	}
+}
+
+// TestOverridesReachModelList 确认覆盖项真的进了模型列表与 pi 配置：
+// 别名要替掉展示名，隐藏要真的从 pi 配置里消失。
+func TestOverridesReachModelList(t *testing.T) {
+	console, _ := newLivePanel(t)
+
+	payload := map[string]any{"models": map[string]any{
+		"glm-5.3": map[string]any{"alias": "主力", "thinking_level_map": map[string]any{"high": "high"}},
+		"hy3":     map[string]any{"hidden": true},
+	}}
+	if recorder := call(t, console, http.MethodPut, "/api/overrides", payload, nil); recorder.Code != http.StatusOK {
+		t.Fatalf("写入覆盖表失败：%s", recorder.Body.String())
+	}
+
+	// 列表里两个都要在（编辑页得看得见被隐藏的），且别名已生效。
+	recorder := call(t, console, http.MethodGet, "/api/models", nil, nil)
+	var listed struct {
+		Models []modelEntry `json:"models"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("解析列表失败：%v", err)
+	}
+	if len(listed.Models) != 2 {
+		t.Fatalf("模型数 = %d，隐藏项不应从编辑列表里消失", len(listed.Models))
+	}
+	if listed.Models[0].Alias != "主力" || !strings.HasPrefix(listed.Models[0].DisplayName, "主力") {
+		t.Errorf("别名没生效：%+v", listed.Models[0])
+	}
+	if !listed.Models[1].Hidden {
+		t.Errorf("隐藏标记没回传：%+v", listed.Models[1])
+	}
+
+	// pi 配置要过滤掉隐藏项，并带上思考档位映射。
+	recorder = call(t, console, http.MethodGet, "/api/models/pi", nil, nil)
+	body := recorder.Body.String()
+	if strings.Contains(body, `"hy3"`) {
+		t.Errorf("隐藏的模型不该出现在 pi 配置里：%s", body)
+	}
+	if !strings.Contains(body, "主力") {
+		t.Errorf("pi 配置里没有别名：%s", body)
+	}
+	if !strings.Contains(body, `thinkingLevelMap`) {
+		t.Errorf("pi 配置里没有思考档位映射：%s", body)
 	}
 }
 
@@ -395,12 +440,14 @@ func TestStatusIncludesMode(t *testing.T) {
 }
 
 // TestBillingAndModelsReportUnavailableInClientMode 客户端模式没有凭证，
-// 余额与模型目录都属于网关那一侧。这里必须给出明确的原因，
+// 余额属于网关那一侧（模型目录不在此列：v0.9.0 起客户端模式经 relay
+// 也能拿到目录，覆盖表的编辑与回推要用它）。这里必须给出明确的原因，
 // 而不是一个「读取失败」——那会被误读成网络问题。
 func TestBillingAndModelsReportUnavailableInClientMode(t *testing.T) {
 	console, _ := newLivePanel(t)
 	console.deps.Credential = nil
 	console.deps.Billing = nil
+	// 未配对时连后端都没有，这时目录确实拿不到。
 	console.deps.Upstream = nil
 
 	for _, path := range []string{"/api/billing", "/api/models", "/api/models/pi"} {

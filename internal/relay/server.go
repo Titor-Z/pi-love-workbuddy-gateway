@@ -14,12 +14,14 @@ package relay
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"reflect"
 	"strings"
 
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/paircode"
 )
@@ -39,6 +41,13 @@ const pingPath = "/relay/v1/ping"
 // pairPath 是配对端点。它**不需要 PSK**——短码本身就是这次的凭据。
 // 校验通过后把长密钥交出去（走 TLS），之后客户端一直用长密钥。
 const pairPath = "/relay/v1/pair"
+
+// overridesPath 是模型覆盖表同步端点。
+//
+// 与凭证端点的方向不同：凭证**只下不下上**，覆盖表**接受推送**。
+// 理由是覆盖表不含任何秘密（就是别名、日期、思考档位），而用户在外面
+// 那台机器上的改动必须能带回来。详见 docs/model-overrides-design.md。
+const overridesPath = "/relay/v1/model-overrides"
 
 // credentialPath 是凭证同步端点。
 //
@@ -60,9 +69,11 @@ type Deps struct {
 	Devices DeviceRegistry
 	// PairingCodes 校验一次性配对码。为 nil 时 /relay/v1/pair 一律拒绝。
 	PairingCodes *paircode.Code
-	PSK          string
-	Version      string
-	Logger       Reporter
+	// Overrides 提供模型覆盖表。为 nil 时该端点返回 501：客户端模式下没有它。
+	Overrides OverridesStore
+	PSK       string
+	Version   string
+	Logger    Reporter
 }
 
 // DeviceRegistry 是 relay 需要的设备表能力。抽窄接口是为了让调用方能不用
@@ -70,6 +81,15 @@ type Deps struct {
 type DeviceRegistry interface {
 	Observe(id, name string)
 	IsRevoked(id string) bool
+}
+
+// OverridesStore 是 relay 需要的覆盖表能力。抽窄接口是为了让调用方
+// 不用构造真实的 catalog.Store 也能测试。
+type OverridesStore interface {
+	// Snapshot 返回当前表的副本。
+	Snapshot() *catalog.Overrides
+	// Apply 带乐观并发检查地替换整表；基准不符时返回 catalog.ErrStaleRevision。
+	Apply(base int64, models map[string]catalog.Override, by string) (*catalog.Overrides, error)
 }
 
 // Reporter 是 relay 记日志的最小接口，避免它依赖具体的日志实现。
@@ -98,6 +118,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET "+pingPath, s.authorized(s.handlePing))
 	mux.Handle("/v1/", s.authorized(s.forward()))
 	mux.HandleFunc("GET "+credentialPath, s.authorized(s.handleCredential))
+	mux.HandleFunc("GET "+overridesPath, s.authorized(s.handleGetOverrides))
+	mux.HandleFunc("PUT "+overridesPath, s.authorized(s.handlePutOverrides))
 	// 配对端点不走 authorized：它要拿短码换长密钥，而长密钥正是它还没有的东西。
 	mux.HandleFunc("POST "+pairPath, s.handlePair)
 	return mux
@@ -167,6 +189,52 @@ func (s *Server) handlePair(w http.ResponseWriter, r *http.Request) {
 		"psk":     s.deps.PSK,
 		"version": s.deps.Version,
 	})
+}
+
+// handleGetOverrides 下发网关权威那一份覆盖表。
+func (s *Server) handleGetOverrides(w http.ResponseWriter, _ *http.Request) {
+	if s.deps.Overrides == nil {
+		writeRelayError(w, http.StatusNotImplemented, "not_configured",
+			"本网关没有可同步的模型覆盖表")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.deps.Overrides.Snapshot())
+}
+
+// handlePutOverrides 接收客户端合并后的覆盖表。
+//
+// 带乐观并发检查：客户端必须说明它是在哪个 revision 上做的合并。
+// 网关在这期间被别人改过就返回 409，让客户端重新拉取、重新合并——
+// 绝不静默覆盖，那会悄悄丢掉另一个人的改动。
+func (s *Server) handlePutOverrides(w http.ResponseWriter, r *http.Request) {
+	if s.deps.Overrides == nil {
+		writeRelayError(w, http.StatusNotImplemented, "not_configured",
+			"本网关没有可同步的模型覆盖表")
+		return
+	}
+	var request struct {
+		BaseRevision int64                       `json:"base_revision"`
+		Models       map[string]catalog.Override `json:"models"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&request); err != nil {
+		writeRelayError(w, http.StatusBadRequest, "bad_request", "请求体不是合法 JSON")
+		return
+	}
+	by := DeviceFrom(r.Context())
+	saved, err := s.deps.Overrides.Apply(request.BaseRevision, request.Models, by)
+	switch {
+	case errors.Is(err, catalog.ErrStaleRevision):
+		writeRelayError(w, http.StatusConflict, "stale_revision",
+			"网关上的模型覆盖表在这期间被别人改过。请重新拉取后再合并一次。")
+		return
+	case err != nil:
+		writeRelayError(w, http.StatusBadRequest, "invalid_request", err.Error())
+		return
+	}
+	if s.deps.Logger != nil {
+		s.deps.Logger.Printf("设备 %s 同步了模型覆盖表（revision %d）", by, saved.Revision)
+	}
+	writeJSON(w, http.StatusOK, saved)
 }
 
 // remoteHost 取出调用方的地址（不含端口），只用于日志。

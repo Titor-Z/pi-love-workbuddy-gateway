@@ -149,6 +149,54 @@ func TestModelsParsesGatewayCatalog(t *testing.T) {
 	}
 }
 
+// TestModelsParsesSourceFields 客户端要能从网关下发的原始字段里
+// 完整重建 ModelInfo。以前只解析一个不存在的 workbuddy.label，
+// 结果就是客户端模式下费用标记、上下文、思考档位全部静默丢掉。
+func TestModelsParsesSourceFields(t *testing.T) {
+	_, fingerprint, server := newTestServer(t, Deps{PSK: "topsecret", Logger: discardLogger(),
+		Backend: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"data":[{"id":"glm-5.3","workbuddy":{
+				"free":false,"credits":"0.79x",
+				"source":{"name":"GLM-5.3","credits":"x0.79","tags":["badge:夜间免费:green"],
+				"context_window":1000000,"max_tokens":64000,"images":true,"tools":true,
+				"thinking":true,"efforts":["low","high"]}}}]}`)
+		}),
+	})
+	relayClient, err := NewClient(Config{
+		BaseURL:     server.URL,
+		PSK:         "topsecret",
+		Fingerprint: fingerprint,
+		Device:      &identity.Device{ID: "d1"},
+	})
+	if err != nil {
+		t.Fatalf("构造客户端失败：%v", err)
+	}
+	models, err := relayClient.Models(t.Context())
+	if err != nil {
+		t.Fatalf("拉取失败：%v", err)
+	}
+	if len(models) != 1 {
+		t.Fatalf("模型数 = %d，期望 1", len(models))
+	}
+	model := models[0]
+	if model.Name != "GLM-5.3" || model.Credits != "x0.79" {
+		t.Errorf("原始字段没还原：%+v", model)
+	}
+	if model.MaxInputTokens != 1000000 || model.MaxOutputTokens != 64000 {
+		t.Errorf("上下文与最大输出没还原：%+v", model)
+	}
+	if !model.SupportsImages || !model.SupportsToolCall || !model.SupportsThinking {
+		t.Errorf("能力位没还原：%+v", model)
+	}
+	if len(model.Efforts) != 2 || model.Efforts[1] != "high" {
+		t.Errorf("思考档位没还原：%+v", model.Efforts)
+	}
+	if len(model.Tags) != 1 || model.Tags[0] != "badge:夜间免费:green" {
+		t.Errorf("标签没还原：%+v", model.Tags)
+	}
+}
+
 // TestErrorsPassthroughBody 网关的错误要原样到达客户端，
 // 否则用户看到的只能是一句「请求失败」。
 func TestErrorsPassthroughBody(t *testing.T) {
