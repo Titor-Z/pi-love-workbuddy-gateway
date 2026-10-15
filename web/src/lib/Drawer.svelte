@@ -1,13 +1,12 @@
 <script>
   // 抽屉：从右侧滑出的详情面板，替掉「点行只能看一行摘要」的窘境。
   //
-  // 设计约束（design.md）：零圆角、硬投影、遮罩只压暗不模糊。
-  // 抽屉本身是**不透明**的纸面（身后没有滚动内容可糊），所以不用玻璃——
-  // 玻璃在纯色底上糊不出任何东西，只有顶栏和确认框那种「有内容经过」的位置才显形。
-  // 这里和卡片、按钮一致：不用玻璃。
+  // 设计约束（design-v2.md 第六节）：抽屉是不透明的纸面（背后是被压暗的页面，
+  // 有细节可糊但不想让页面内容透过来读成「另一张卡」），圆角 8px、5px 左边框。
+  // 遮罩只压暗不模糊。
   //
-  // 动效：入场 180ms ease-out，从 translateX(8px) 起（不是从「无」出现）。
-  import { onMount } from "svelte";
+  // 动效：入场用 ease-out（240ms），从 translateX(8px) 起（不是从「无」出现）。
+  import { onMount, onDestroy } from "svelte";
   import * as fmt from "./format.js";
 
   let { event = null, onClose } = $props();
@@ -15,7 +14,15 @@
   let closeButton = $state(undefined);
 
   // 抽屉打开时焦点给关闭按钮；Esc 关闭、点遮罩关闭、Tab 在抽屉内做最小焦点陷阱。
-  onMount(() => closeButton?.focus());
+  onMount(() => {
+    closeButton?.focus();
+    // 锁住页面滚动，并用右侧内边距占住滚动条原来的位置，否则内容会横向跳一下。
+    const scrollbar = window.innerWidth - document.documentElement.clientWidth;
+    document.documentElement.style.setProperty("--scrollbar-w", `${scrollbar}px`);
+    document.body.classList.add("scroll-locked");
+  });
+
+  onDestroy(() => document.body.classList.remove("scroll-locked"));
 
   function onKeydown(e) {
     if (e.key === "Escape") {
@@ -189,16 +196,18 @@
   }
 
   .drawer {
-    width: min(560px, 92vw);
+    width: min(440px, 92vw);
     height: 100%;
     background: var(--paper);
     border-left: 5px solid var(--rule);
-    /* 硬投影：抽屉浮在页面之上靠的是错位，不是柔光。 */
+    border-radius: var(--r-layer) 0 0 var(--r-layer);
+    /* 抽屉贴着右边缘，左侧只留一层很淡的投影表示「浮在页面上」。
+       用实色 8px 硬投影会像另一张卡从抽屉底下错位露出来。 */
     box-shadow: -8px 0 0 color-mix(in srgb, var(--rule) 22%, transparent);
     display: flex;
     flex-direction: column;
     transform: translateX(0);
-    transition: transform 180ms ease-out;
+    transition: transform 240ms ease-out;
   }
 
   @starting-style {
@@ -235,7 +244,7 @@
   }
 
   .block-title {
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     font-size: 12px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -273,7 +282,7 @@
   }
 
   .kv dd.err {
-    color: var(--danger-ink);
+    color: var(--error);
   }
 
   .note {
@@ -300,8 +309,9 @@
     margin-top: 12px;
     background: color-mix(in srgb, var(--ink) 4%, transparent);
     border: 1px solid var(--line);
+    border-radius: var(--r-control);
     padding: 12px;
-    font-family: var(--mono);
+    font-family: var(--font-mono);
     font-size: 12px;
     line-height: 1.6;
     white-space: pre-wrap;
@@ -317,8 +327,8 @@
   }
 
   .kv dd.reset {
-    font-family: var(--mono);
-    color: var(--danger-ink);
+    font-family: var(--font-mono);
+    color: var(--error);
   }
 
   @media (prefers-reduced-motion: reduce) {

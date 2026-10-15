@@ -1,7 +1,7 @@
-/* RawBlock 设计系统。
-   反设计／粗野主义：无圆角、无阴影、厚边框、纯黑白。
-   色板只有 6 色：黑白，加上仅限链接的蓝与三个状态色。
-   间距用 8px 基数，但刻意不规则——不要把这个文件「整理」成整齐的网格。
+/* Gauge 设计系统 v2。
+   印刷骨架，数字皮层：身份留在纸墨、边框层级、等宽数字、硬投影、纹理语义里；
+   现代性从刻度（圆角、间距、控制高度、图标）里长出来，不从装饰里长出来。
+   规范见 design-v2.md。
 
    变量名用语义而不是颜色：暗色模式下「--black」会变成白色，
    那种名字会把人绕进去。--ink 是前景与粗边框，--paper 是底色。 */
@@ -22,19 +22,36 @@
   --line: #c9c9c2; /* 细分隔线 */
   --muted: #55534e; /* 次要文字 */
 
-  /* 反向块：黑底白字那种。激活的导航、按下的按钮、付费标记都用它。 */
+  /* 反向块：黑底白字那种。主角统计块、按下的按钮、付费标记都用它。 */
   --invert-bg: #111111;
   --invert-fg: #f4f4f0;
   /* 反白块里的次要文字。单独给一个色，而不是给 --invert-fg 加 opacity——
      第十二节禁止用半透明做弱化（下层会透出来）。 */
   --invert-muted: #b3b3b3;
 
+  /* 强调色（v2 新增）：这套系统里**唯一的新颜色**，所以边界比谁都清楚——
+     只做交互语义（选中、聚焦、进行中、当前项），不做大面积填充，
+     也不做数据系列色。唯一的合法大块是 --accent-tint 这种浅底。 */
+  --accent: #1d4ed8;
+  --accent-tint: #e4eafb;
+
+  /* 圆角三级刻度（v2 新增）。规则：嵌套越深，角越圆——
+     正好对仗边框刻度的「嵌套越深，线越细」。禁止 2/6/12/16 及任何中间值。 */
+  --r-structure: 0; /* 结构：卡片、表格、统计块、提示条、导航行 */
+  --r-control: 4px; /* 控件：按钮、输入框、下拉、芯片、开关 */
+  --r-layer: 8px; /* 轻层：下拉菜单、气泡、抽屉、toast、对话框 */
+
+  /* 控制高度与密度（v2 新增）。同一屏不要混用密度。 */
+  --control-h: 32px;
+
   /* 禁用态：灰底 + 灰字 + 灰边。
      不用 opacity——半透明会让下层内容透出来，深色底上尤其糊。 */
-  /* z-index 只用于系统性的层：粘性顶栏、遮罩、对话框。
+  /* z-index 只用于系统性的层：粘性顶栏、粘性表头、遮罩、toast。
      禁止出现 9999 这类「我先压住它」的数字——那种值一旦有两个就没人说得清谁在上面。 */
   --z-sticky: 10;
+  --z-sticky-2: 11;
   --z-scrim: 100;
+  --z-toast: 120;
 
   --disabled-bg: #e8e8e3;
   --disabled-fg: #6b6960;
@@ -61,10 +78,11 @@
   --chart-7: #4b0082;
   --chart-8: #808000;
 
-  --font-title: "Archivo Black", "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-title: "Archivo Black", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
   /* 三个设计字体都没有中文字形，中文靠系统回退。
-     嵌入 CJK 字体要 5~15MB，不值得。 */
-  --font-body: "Work Sans", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", sans-serif;
+     嵌入 CJK 字体要 5~15MB，不值得。
+     中文标题用 Noto Sans SC 的 Black/Bold 顶替 Archivo Black。 */
+  --font-body: "Work Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-mono: "Space Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
 }
 
@@ -100,6 +118,10 @@
   --invert-bg: #42413b;
   --invert-fg: #e6e5df;
   --invert-muted: #c0bfb6;
+
+  /* 强调色只调亮度，不动色相：暗色底上纯 #1D4ED8 对比度不够。 */
+  --accent: #7aa2ff;
+  --accent-tint: #232a3d;
 
   --disabled-bg: #22221d;
   --disabled-fg: #84837b;
@@ -253,6 +275,7 @@ code.copyable {
   word-break: break-all;
   background: var(--surface);
   border: 2px solid var(--rule);
+  border-radius: var(--r-control);
   padding: 2px 6px;
   display: inline-block;
 }
@@ -316,13 +339,16 @@ code.copyable {
 pre {
   background: var(--surface);
   border: 3px solid var(--rule);
+  border-radius: var(--r-control);
   padding: 12px;
   overflow-x: auto;
   font-size: 13px;
   margin: 0;
 }
 
-/* ── 版式骨架 ─────────────────────────────────────────── */
+/* ── 应用骨架 ─────────────────────────────────────────
+   顶栏（玻璃）+ 内容区，内容最大 1440px、内边距 24px。
+   导航仍在顶栏——这是本控制台的习惯，不改成侧栏。 */
 
 .shell {
   min-height: 100vh;
@@ -332,9 +358,7 @@ pre {
   flex-direction: column;
 }
 
-/* 顶栏是本界面里**唯一**能用玻璃的地方：只有它背后有东西在动
-   （表格和图表从下面滚过去）。别处用玻璃没有意义——背后是平的白底，
-   模糊一片白还是白，只是白白付出重绘代价。见 design.md 第八节。 */
+/* 顶栏是玻璃真正能显形的位置：滚动时表格行与反白块从下面经过（design-v2.md 第六节）。 */
 .topbar {
   border-bottom: 5px solid var(--rule);
   display: flex;
@@ -343,16 +367,14 @@ pre {
   position: sticky;
   top: 0;
   z-index: var(--z-sticky);
-
   /* 第一行是不支持 color-mix 时的兜底：先用实色，能算再换成半透明。 */
   background: var(--paper);
   background: color-mix(in srgb, var(--paper) 82%, transparent);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
 }
 
-/* 有人把系统的「减少透明度」打开了，就别硬上——直接给实色。
-   Apple 的可访问性清单里有这一条（design.md 第十一节）。 */
+/* 有人把系统的「减少透明度」打开了，就别硬上——直接给实色。 */
 @media (prefers-reduced-transparency: reduce) {
   .topbar {
     background: var(--paper);
@@ -361,10 +383,8 @@ pre {
   }
 }
 
-/* 品牌区**不画竖线**。
-   原来有一条 5px，但它紧贴着它右边那个导航项：当前页的反白块也是黑的，
-   两者一连起来就是一段 75px 的纯黑，看起来像「总览有个很粗的左边框」。
-   品牌本身已经足够区分（Archivo Black 17px + 带框的版本号），不需要再画线。 */
+/* 品牌区不画竖线：它右边紧邻导航项，反白/浅底连起来会像一条很粗的左边框。
+   品牌本身已经足够区分（Archivo Black 17px + 带框的版本号）。 */
 .brand {
   font-family: var(--font-title);
   font-size: 17px;
@@ -380,6 +400,7 @@ pre {
   font-family: var(--font-mono);
   font-size: 11px;
   border: 2px solid var(--rule);
+  border-radius: var(--r-control);
   padding: 1px 5px;
   text-transform: none;
   letter-spacing: 0;
@@ -391,14 +412,13 @@ pre {
   flex-wrap: wrap;
 }
 
-/* 导航项之间**不画竖线**。两条理由：
-   1. 它已经有「反白填充」表达自己是个独立的格子（hover 反白、当前页反白）。
-      再画一条线是同一件事说两遍，而边框是本系统唯一的层级手段，说两遍就稀释了。
-   2. 竖线是 3px（元素级），顶栏底边是 5px（结构级）——同一个栏里两条线干同一件事
-      却不一样重，本身就是刻度混乱。
-   分隔靠间距与填充，不靠线。 */
+/* 导航项之间不画竖线，靠间距与填充分隔。
+   当前项用强调色浅底 + 5px 强调色下沿——
+   下沿用绝对定位压到顶栏的 5px 结构线上（bottom:-5px），
+   与顶栏底边重叠成一条连续的边框，而不是在它上面另起一条线。 */
 .nav button {
   /* 玻璃面板里按钮自己不能是不透明的，否则会挡住背后那层模糊。 */
+  position: relative;
   background: transparent;
   font-family: var(--font-body);
   font-size: 13px;
@@ -418,8 +438,18 @@ pre {
 }
 
 .nav button[aria-current="page"] {
-  background: var(--invert-bg);
-  color: var(--invert-fg);
+  background: var(--accent-tint);
+  color: var(--accent);
+}
+
+.nav button[aria-current="page"]::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -5px;
+  height: 5px;
+  background: var(--accent);
 }
 
 .topbar .spacer {
@@ -440,6 +470,7 @@ pre {
   width: 10px;
   height: 10px;
   border: 2px solid var(--rule);
+  border-radius: 50%; /* 圆形构件是圆角刻度的唯一豁免 */
   display: inline-block;
 }
 .dot.on {
@@ -451,15 +482,15 @@ pre {
 
 main {
   flex: 1;
-  padding: 32px;
-  max-width: 1280px;
+  padding: 24px;
+  max-width: 1440px;
   width: 100%;
   margin: 0 auto;
 }
 
 footer {
   border-top: 5px solid var(--rule);
-  padding: 16px 32px;
+  padding: 16px 24px;
   display: flex;
   flex-wrap: wrap;
   gap: 16px;
@@ -467,6 +498,28 @@ footer {
   font-size: 12px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
+}
+
+@media (max-width: 720px) {
+  main {
+    padding: 16px;
+  }
+  /* 窄屏时状态区会换行，这时上边加一条线来分隔它和导航。 */
+  .topbar .health {
+    border-top: 3px solid var(--rule);
+    width: 100%;
+    padding: 8px 16px;
+  }
+  .nav button {
+    padding: 12px 16px;
+  }
+}
+
+/* 抽屉打开时锁住页面滚动，并用右侧内边距占住滚动条原来的位置，
+   否则滚动条一消失内容会横向跳一下。--scrollbar-w 由 Drawer 在打开时量好写入。 */
+body.scroll-locked {
+  overflow: hidden;
+  padding-right: var(--scrollbar-w, 0);
 }
 
 /* ── 区块与卡片 ─────────────────────────────────────────
@@ -634,9 +687,14 @@ footer {
   border-color: var(--error);
 }
 
-/* 硬投影：唯一允许的「浮起」手段。纯色位移，不是柔光。 */
+/* 硬投影：唯一允许的「浮起」手段。纯色位移，不是柔光。
+   v2 分两级：T2 轻层 4px（下拉、toast、气泡），T3 模态 8px（对话框、抽屉）。 */
 .lifted {
   box-shadow: 8px 8px 0 var(--rule);
+}
+
+.lifted-sm {
+  box-shadow: 4px 4px 0 var(--rule);
 }
 
 /* ── 表格 ─────────────────────────────────────────────── */
@@ -655,9 +713,23 @@ thead th {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.12em;
+  background: var(--surface);
   border-bottom: 3px solid var(--rule);
   padding: 8px 10px;
   white-space: nowrap;
+  /* 粘性表头：滚到下面去的行从它背后经过，所以这里用玻璃（≥88%）。 */
+  position: sticky;
+  top: 56px;
+  z-index: var(--z-sticky-2);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+@media (prefers-reduced-transparency: reduce) {
+  thead th {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
 }
 
 /* 行与行之间不画线。
@@ -700,6 +772,13 @@ th.num {
   font-family: var(--font-mono);
 }
 
+/* 只换字体、不改对齐。用于「等宽的文本」（ID、路径、模型名）——
+   这类列的表头是左对齐的，内容也必须左对齐，否则表头与列对不上。
+   纯数字列才用 .num（右对齐 + 等宽）。 */
+.mono {
+  font-family: var(--font-mono);
+}
+
 /* 空状态用斜纹底。斜纹在印刷里是「此处不可用」的通用记号——
    纹理承担语义，不承担装饰。 */
 .empty {
@@ -721,6 +800,7 @@ th.num {
   text-transform: uppercase;
   letter-spacing: 0.06em;
   border: 2px solid var(--rule);
+  border-radius: var(--r-control);
   padding: 1px 5px;
   white-space: nowrap;
 }
@@ -796,7 +876,9 @@ button.action {
   background: var(--paper);
   color: var(--ink);
   border: 3px solid var(--rule);
-  padding: 8px 16px;
+  border-radius: var(--r-control);
+  height: var(--control-h);
+  padding: 0 16px;
   cursor: pointer;
 }
 
@@ -875,10 +957,23 @@ textarea {
   font-size: 13px;
   line-height: 1.5;
   border: 3px solid var(--rule);
-  border-radius: 0;
+  border-radius: var(--r-control);
   padding: 8px 10px;
   background: var(--paper);
   color: var(--ink);
+}
+
+/* 单行控件统一到默认控制高度（32px），同一屏不混用密度。
+   textarea 不在此列——它要高多少由内容决定。 */
+input:not([type]),
+input[type="text"],
+input[type="search"],
+input[type="number"],
+input[type="password"],
+input[type="date"],
+select {
+  height: var(--control-h);
+  padding: 0 10px;
 }
 
 /* 占位符是「这里还没写」的提示，不是可读内容：降到 --muted，

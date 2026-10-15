@@ -1,5 +1,6 @@
 <script>
   import Skeleton from "../lib/Skeleton.svelte";
+  import { onMount } from "svelte";
   import { api } from "../lib/api.js";
   import Chart from "../lib/Chart.svelte";
   import { stackedBarOptions, lineOptions, colorFor, ink } from "../lib/chartTheme.js";
@@ -10,6 +11,15 @@
   let error = $state("");
   let loading = $state(true);
   let days = $state(14);
+
+  // 会走的「现在」。限流卡片判的是「恢复时间过了没有」，
+  // 而这个判断每过一秒结论都可能变——内部偷偷读时钟的话，
+  // 到点的限流会一直挂在页面上（用户看到的就是「过期了还在显示」）。
+  let now = $state(Date.now());
+  onMount(() => {
+    const timer = setInterval(() => (now = Date.now()), 1000);
+    return () => clearInterval(timer);
+  });
 
   async function load() {
     loading = true;
@@ -50,9 +60,25 @@
   const today = $derived(usage?.days?.at(-1) ?? null);
   const totals = $derived(usage?.totals ?? { requests: 0, credit: 0, blocked: 0, block_rate: 0 });
 
-  // 当前仍可能生效的限流。后端给出恢复时间才算，解析不出就不显示——
-  // 宁可少说一句，也不要告诉用户一个错的恢复时间。
-  const limits = $derived(usage?.totals?.active_limits ?? []);
+  // 当前仍可能生效的限流。后端已按恢复时间过滤过一次，这里再按
+  // 「恢复时间过了没有」实时过滤——否则一次拉到的数据里那些快到的限流
+  // 会一直挂到下次刷新。解析不出恢复时间的一并排除：
+  // 宁可少说一句，也不要告诉用户一个错的时间。
+  const limits = $derived(
+    (usage?.totals?.active_limits ?? []).filter((limit) => {
+      if (!limit.reset_at) return false;
+      const reset = new Date(limit.reset_at).getTime();
+      return !Number.isNaN(reset) && reset > now;
+    }),
+  );
+
+  // 距离恢复还有多久。恢复时间在未来，所以不能复用 fmt.relative——
+  // 那是「多久以前」，用在未来时刻上会读出「刚刚」这种反话。
+  // 精确时刻放进 title：倒计时给判断，绝对时间给对账。
+  function countdown(resetAt) {
+    const seconds = Math.max(0, Math.round((new Date(resetAt).getTime() - now) / 1000));
+    return seconds < 60 ? "1 分钟内" : fmt.uptime(seconds);
+  }
 
   // 堆叠柱状图：x 轴是日期，每个模型一条数据集。
   const chartData = $derived.by(() => {
@@ -104,16 +130,8 @@
   </header>
 
   <div class="grid stats">
-    <div class="stat">
-      <div class="label"><span>今日请求</span></div>
-      <div class="value">{today?.requests ?? 0}</div>
-      <div class="sub">最近 {days} 天 {totals.requests} 次</div>
-    </div>
-    <div class="stat">
-      <div class="label"><span>今日消耗</span></div>
-      <div class="value">{fmt.credit(today?.credit)}</div>
-      <div class="sub">最近 {days} 天 {fmt.credit(totals.credit)}</div>
-    </div>
+    <!-- 主角排在第一个：2fr 落在栅格的第一个子元素上，
+         主角排第三的话只会拿到 1fr，数字就折了（design-v2.md 第九节）。 -->
     <div class="stat hero">
       <div class="label"><span>剩余额度</span></div>
       <div class="value">{billing ? fmt.credit(billing.total_remain) : "—"}</div>
@@ -123,6 +141,16 @@
           · 来自网关
         {/if}
       </div>
+    </div>
+    <div class="stat">
+      <div class="label"><span>今日请求</span></div>
+      <div class="value">{today?.requests ?? 0}</div>
+      <div class="sub">最近 {days} 天 {totals.requests} 次</div>
+    </div>
+    <div class="stat">
+      <div class="label"><span>今日消耗</span></div>
+      <div class="value">{fmt.credit(today?.credit)}</div>
+      <div class="sub">最近 {days} 天 {fmt.credit(totals.credit)}</div>
     </div>
     <div class="stat">
       <div class="label"><span>拦截 / 拒答</span></div>
@@ -137,7 +165,9 @@
       <ul>
         {#each limits as limit (limit.model)}
           <li>
-            <code>{limit.model}</code> 预计 <strong>{limit.reset_at}</strong> 恢复
+            <code>{limit.model}</code> 预计 <strong title={fmt.time(limit.reset_at)}
+              >{countdown(limit.reset_at)}</strong
+            > 后恢复
             <span class="hint">（{limit.since} 撞墙；也可以换其他模型继续用）</span>
           </li>
         {/each}
@@ -167,8 +197,8 @@
             <th class="num">本轮剩余</th>
             <th class="num">本轮总量</th>
             <th class="num">本轮已用</th>
-            <th>周期结束</th>
-            <th>到期</th>
+            <th class="num">周期结束</th>
+            <th class="num">到期</th>
           </tr>
         </thead>
         <tbody>
@@ -233,14 +263,17 @@
     </header>
 
     <div class="grid two">
+      <!-- 中间对齐：这一行里「命中」那一格是双行，其余都是单行。
+           全局那档 top 是给多行说明列的，用在这里会让单行格子
+           的内容贴在行首、和双行格的第一行错开。 -->
       <div class="card tight">
-        <table>
+        <table class="middle">
           <thead>
             <tr>
               <th>模型</th>
               <th class="num">请求</th>
               <th class="num">输入</th>
-              <th class="num">命中</th>
+              <th class="num">命中 / 命中率</th>
               <th class="num">消耗</th>
               <th class="num">占比</th>
             </tr>
@@ -248,13 +281,21 @@
           <tbody>
             {#each usage.models as model (model.model)}
               <tr>
-                <td class="num">{model.model}</td>
+                <td class="mono">{model.model}</td>
                 <td class="num">{model.requests}</td>
                 <td class="num">{fmt.tokens(model.in)}</td>
+                <!-- 命中数与命中率各占一行：挤在同一行里，长一点的模型名
+                     就会把这一格折成两行，于是每行高度都不一致。
+                     拆成两行后，命中率永远有自己那一行，行高也就齐了。 -->
                 <td class="num">
-                  {model.cached
-                    ? `${fmt.tokens(model.cached)} ${model.in > 0 ? fmt.percent(model.cached / model.in) : ""}`
-                    : "—"}
+                  {#if model.cached}
+                    <div>{fmt.tokens(model.cached)}</div>
+                    <div class="dim">
+                      {model.in > 0 ? fmt.percent(model.cached / model.in) : "—"}
+                    </div>
+                  {:else}
+                    —
+                  {/if}
                 </td>
                 <td class="num">{fmt.credit(model.credit)}</td>
                 <td class="num">

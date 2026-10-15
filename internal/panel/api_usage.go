@@ -3,6 +3,7 @@ package panel
 import (
 	"math"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"time"
@@ -62,9 +63,41 @@ type usageTotals struct {
 
 // activeLimit 是一个模型当前可能仍生效的限流。
 type activeLimit struct {
-	Model   string `json:"model"`
-	ResetAt string `json:"reset_at"` // 后端原文，如 "2026-10-14 23:13:09 UTC+8"
-	Since   string `json:"since"`    // 最近一次撞墙的时间，便于判断新旧
+	Model string `json:"model"`
+	// ResetAt 是恢复时刻的 RFC3339（本地时区），前端直接比较大小即可；
+	// 解析不出就留空，前端宁可少显示也不要显示一个错的时间。
+	ResetAt string `json:"reset_at"`
+	Since   string `json:"since"` // 最近一次撞墙的时间，便于判断新旧
+}
+
+// resetAtOffset 匹配后端给出的重置时间："2026-10-14 23:13:09 UTC+8" 这类
+// 「本地时间 + 时区缩写 + 数字偏移」的写法。
+//
+// 为什么必须自己拆：time.Parse 的 MST 只认时区缩写本身（"UTC"、"CST"），
+// 不认识紧跟其后的 "+8"——按 "2006-01-02 15:04:05 MST" 解析真实数据会得到
+// "extra text: \"+8\""。这一个解析失败就是概览页那张限流卡片一直显示
+// 「有模型正在频率限制中」的原因：时间判不了新旧，限流便永远「仍然生效」。
+// 偏移量宁可按本机时区解读（后端固定给 UTC+8，而网关跑在国内），也不猜。
+var resetAtOffset = regexp.MustCompile(`^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\s+[A-Za-z]{1,5}\s*[+-]\d{1,2}(?::\d{2})?$`)
+
+// parseResetAt 解析后端给出的重置时间；解析不出返回零值。
+func parseResetAt(raw string) (time.Time, bool) {
+	if raw == "" {
+		return time.Time{}, false
+	}
+	if matched := resetAtOffset.FindStringSubmatch(raw); matched != nil {
+		if parsed, err := time.ParseInLocation("2006-01-02 15:04:05", matched[1], time.Local); err == nil {
+			return parsed, true
+		}
+	}
+	// 兜底：标准库自己能吃下的几种形状（RFC3339、"... UTC"、"... CST"）。
+	if parsed, err := time.Parse(time.RFC3339, raw); err == nil {
+		return parsed, true
+	}
+	if parsed, err := time.Parse("2006-01-02 15:04:05 MST", raw); err == nil {
+		return parsed, true
+	}
+	return time.Time{}, false
 }
 
 // usageResponse 是用量页的数据。
@@ -248,17 +281,16 @@ func collectActiveLimits(records []journal.Record, now time.Time) []activeLimit 
 
 	limits := make([]activeLimit, 0, len(latest))
 	for model, record := range latest {
-		if record.RateResetAt == "" {
+		resetTime, ok := parseResetAt(record.RateResetAt)
+		if !ok {
 			continue // 解析不出恢复时间，宁可少显示也不要显示错的
 		}
-		if resetTime, err := time.Parse("2006-01-02 15:04:05 MST", record.RateResetAt); err == nil {
-			if resetTime.Before(now) {
-				continue // 已经过了恢复时间，不算「仍然生效」
-			}
+		if resetTime.Before(now) {
+			continue // 已经过了恢复时间，不算「仍然生效」
 		}
 		limits = append(limits, activeLimit{
 			Model:   model,
-			ResetAt: record.RateResetAt,
+			ResetAt: resetTime.Format(time.RFC3339),
 			Since:   record.Time.Format("15:04"),
 		})
 	}

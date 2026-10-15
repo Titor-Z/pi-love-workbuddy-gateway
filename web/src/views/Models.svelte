@@ -252,7 +252,7 @@
             <tbody>
               {#each syncStatus.conflicts as conflict (conflict.model)}
                 <tr>
-                  <td class="num">{conflict.model}</td>
+                  <td class="mono">{conflict.model}</td>
                   <td>{conflict.local.alias || conflict.local.free_until || "—"}</td>
                   <td>{conflict.remote.alias || conflict.remote.free_until || "—"}</td>
                   <td><span class="dim" style="font-size:11px">用下面的按钮整体选边</span></td>
@@ -303,7 +303,7 @@
           {#each visible as model (model.id)}
             <tr>
               <td>
-                <div class="num" style="font-size:12px">{model.id}</div>
+                <div class="mono" style="font-size:12px">{model.id}</div>
                 <div style="font-size:11px;color:var(--muted)">{model.display_name}</div>
               </td>
               <td>
@@ -361,7 +361,7 @@
           {#each visible as model (model.id)}
             <tr>
               <td>
-                <div class="num" style="font-size:13px">{model.id}</div>
+                <div class="mono" style="font-size:13px">{model.id}</div>
                 {#if model.name.toLowerCase() !== model.id.toLowerCase()}
                   <div style="font-size:11px;color:var(--muted)">{model.name}</div>
                 {/if}
@@ -383,7 +383,7 @@
                     <span class="tag promo">{model.badge}</span>
                   {/if}
                   {#if model.free_until}
-                    <span class="num fee-until">至 {fmt.compactDate(model.free_until)}</span>
+                    <span class="mono fee-until">至 {fmt.compactDate(model.free_until)}</span>
                   {/if}
                 </div>
               </td>

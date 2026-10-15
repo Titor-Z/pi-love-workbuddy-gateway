@@ -424,7 +424,7 @@
                 {#if fullKey}
                   <span class="mono-small" style="color:var(--ink);user-select:all">{fullKey}</span>
                 {:else}
-                  <span class="num">{relay.psk_hint || "未配置"}</span>
+                  <span class="mono">{relay.psk_hint || "未配置"}</span>
                 {/if}
                 <button class="action" onclick={revealKey}>
                   {fullKey ? "隐藏" : "显示"}
@@ -475,11 +475,11 @@
               <th>{device.name || "未命名"}</th>
               <!-- ID 只给前 12 位：32 位十六进制谁也不会去读，却要占掉半张表。
                    12 位与日志页用的是同一个截法，两边能对上号；全文在 title 里。 -->
-              <td class="num" title={device.id}>{fmt.deviceLabel(device.id)}</td>
+              <td class="mono" title={device.id}>{fmt.deviceLabel(device.id)}</td>
               <!-- 相对时间 + 悬停看精确值：一排绝对时间戳读不出「是不是刚连过」，
                    而那正是看这一页时要判断的事。nowrap 是因为折行会把行撑高，
                    半行时间戳看起来像坏了。 -->
-              <td class="num nowrap" title={device.last_seen ? fmt.time(device.last_seen) : ""}>
+              <td class="mono nowrap" title={device.last_seen ? fmt.time(device.last_seen) : ""}>
                 {fmt.relative(device.last_seen, now)}
               </td>
               <td>
@@ -623,15 +623,15 @@
         <tbody>
           <tr>
             <th style="width:200px">网关凭证版本</th>
-            <td class="num">epoch {sync.gateway_epoch ?? "—"}</td>
+            <td class="mono">epoch {sync.gateway_epoch ?? "—"}</td>
           </tr>
           <tr>
             <th>本机凭证版本</th>
-            <td class="num">{sync.local ? `epoch ${sync.local.local_epoch}` : "尚无副本"}</td>
+            <td class="mono">{sync.local ? `epoch ${sync.local.local_epoch}` : "尚无副本"}</td>
           </tr>
           <tr>
             <th>上次同步</th>
-            <td class="num">
+            <td class="mono">
               {sync.local?.last_sync_at ? fmt.time(sync.local.last_sync_at) : "—"}
             </td>
           </tr>

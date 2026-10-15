@@ -174,7 +174,7 @@
         <table>
           <thead>
             <tr>
-              <th style="width:170px">时间</th>
+              <th class="num" style="width:170px">时间</th>
               <th style="width:130px">设备</th>
               <th>模型</th>
               <th>结束</th>
@@ -191,16 +191,16 @@
             {#each pagedChats as event, index (index)}
               <tr class="row" role="button" tabindex="0" onclick={() => (selected = event)} onkeydown={(e) => e.key === "Enter" && (selected = event)}>
                 <td class="num stamp">{fmt.stamp(event.t)}</td>
-                <td class="num" title={event.device || "本机直连"}>{fmt.deviceLabel(event.device)}</td>
-                <td class="num">
+                <td class="mono" title={event.device || "本机直连"}>{fmt.deviceLabel(event.device)}</td>
+                <td class="mono">
                   {event.model}
                   {#if event.blocked}<span class="tag blocked">拦截</span>{/if}
                   {#if event.refused}<span class="tag promo">拒答</span>{/if}
                   {#if event.rate_limited}<span class="tag rate">限流</span>{/if}
                   {#if event.err}<span class="tag promo">失败</span>{/if}
                 </td>
-                <td class="num">{event.finish ?? "—"}</td>
-                <td class="num">
+                <td class="mono">{event.finish ?? "—"}</td>
+                <td>
                   {#if event.blocked_reason}<span class="tag blocked">{event.blocked_reason}</span>{/if}
                   {#if event.refused}<span class="tag promo" title={event.refuse_rule}>疑似拒答</span>{/if}
                   {#if !event.blocked && !event.refused}—{/if}
@@ -241,7 +241,7 @@
         <table class="timeline">
           <thead>
             <tr>
-              <th style="width:170px">时间</th>
+              <th class="num" style="width:170px">时间</th>
               <th style="width:130px">设备</th>
               <th style="width:72px">类型</th>
               <th>说明</th>
@@ -251,8 +251,8 @@
             {#each paged as event, index (index)}
               <tr class="row" class:blocked={event.blocked} onclick={() => (selected = event)}>
                 <td class="num stamp">{fmt.stamp(event.t)}</td>
-                <td class="num" title={event.device || "本机直连"}>{fmt.deviceLabel(event.device)}</td>
-                <td class="num">{fmt.kindLabel(event.kind)}</td>
+                <td class="mono" title={event.device || "本机直连"}>{fmt.deviceLabel(event.device)}</td>
+                <td class="mono">{fmt.kindLabel(event.kind)}</td>
                 <td class="wrap">
                   {event.msg || "—"}
                   {#if event.blocked}<span class="tag blocked">拦截</span>{/if}

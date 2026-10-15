@@ -103,13 +103,14 @@
     transition: opacity 160ms ease-out, transform 160ms ease-out;
     max-width: 460px;
     width: 100%;
-    /* 玻璃。背后是被压暗的页面内容 —— 这里才是它真正显形的地方。 */
+    /* 玻璃 + 轻层圆角。背后是被压暗的页面内容——这里才是它真正显形的地方。 */
     background: var(--paper);
-    background: color-mix(in srgb, var(--paper) 72%, transparent);
+    background: color-mix(in srgb, var(--paper) 82%, transparent);
     backdrop-filter: blur(14px);
     -webkit-backdrop-filter: blur(14px);
     border: 5px solid var(--rule);
-    /* 硬投影：位移，不是柔光。浮层浮起来靠的是错位。 */
+    border-radius: var(--r-layer);
+    /* 硬投影：位移，不是柔光。T3 模态用 8px。 */
     box-shadow: 8px 8px 0 var(--rule);
     padding: 24px;
   }

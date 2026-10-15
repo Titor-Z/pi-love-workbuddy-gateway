@@ -84,31 +84,31 @@
         <tbody>
           <tr>
             <th style="width:200px">监听地址</th>
-            <td class="num">{status.listen_addr}</td>
+            <td class="mono">{status.listen_addr}</td>
           </tr>
           <tr>
             <th>pi 用的地址</th>
-            <td class="num">http://{status.listen_addr}/v1</td>
+            <td class="mono">http://{status.listen_addr}/v1</td>
           </tr>
           <tr>
             <th>登录态文件</th>
-            <td class="num">{status.auth_file}</td>
+            <td class="mono">{status.auth_file}</td>
           </tr>
           <tr>
             <th>文本日志</th>
-            <td class="num">{status.log_path}</td>
+            <td class="mono">{status.log_path}</td>
           </tr>
           <tr>
             <th>事件文件</th>
-            <td class="num">{status.journal_path}</td>
+            <td class="mono">{status.journal_path}</td>
           </tr>
           <tr>
             <th>模型覆盖表</th>
-            <td class="num">{status.overrides_path}</td>
+            <td class="mono">{status.overrides_path}</td>
           </tr>
           <tr>
             <th>账号标识</th>
-            <td class="num">{status.account?.uid || "未读到"}</td>
+            <td class="mono">{status.account?.uid || "未读到"}</td>
           </tr>
         </tbody>
       </table>

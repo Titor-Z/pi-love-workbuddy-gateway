@@ -102,12 +102,11 @@
   <a class="skip" href="#main">跳到正文</a>
 
   <header class="topbar">
-    <!-- 顶部 导航栏 Begin.-->
     <div class="brand">
       <!-- WorkBuddy -->
       <img width="100px" src="{Logo}" alt="pi-love-workbuddy-gateway" />
       {#if version}<span class="ver">{version}</span>{/if}
-    </div> <!-- 顶部 导航栏 End.  -->
+    </div>
 
     <nav class="nav">
       {#each ROUTES as item (item.id)}
