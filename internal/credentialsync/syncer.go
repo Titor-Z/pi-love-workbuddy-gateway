@@ -29,6 +29,7 @@ type Syncer struct {
 	// 以下是进程内状态，不落盘：重启就是全新开始，
 	// 没必要记住「上次失败过」。
 	failures    int
+	lastError   string
 	lastAttempt time.Time
 	lastPull    time.Time
 	lastEpoch   int64
@@ -60,6 +61,12 @@ type State struct {
 	Failures      int           `json:"failures"`
 	NextAttemptIn string        `json:"next_attempt_in,omitempty"`
 	Conflict      *ConflictInfo `json:"conflict,omitempty"`
+	// LastError 是最近一次同步失败的原因。
+	//
+	// 必须单独暴露：失败时本机没有副本，面板只能显示「尚无副本」四个字，
+	// 用户无从判断是网关没开开关、还是网不通、还是本机密钥坏了。
+	// 同步失败本来就是最需要一句原因的场景。
+	LastError string `json:"last_error,omitempty"`
 }
 
 // Snapshot 取当前状态。
@@ -69,6 +76,7 @@ func (s *Syncer) Snapshot() State {
 		LastEpoch:     s.lastEpoch,
 		Failures:      s.failures,
 		NextAttemptIn: s.nextAttemptIn().String(),
+		LastError:     s.lastError,
 	}
 	if local, exists, err := Load(s.Store); err == nil && exists {
 		state.LocalEpoch = local.Epoch
@@ -119,6 +127,16 @@ func (s *Syncer) ResolveConflict(useRemote bool) {
 // 定时循环与「立即同步」按钮都走它。
 func (s *Syncer) Sync(ctx context.Context) error {
 	s.lastAttempt = s.now()
+	if err := s.sync(ctx); err != nil {
+		s.lastError = err.Error()
+		return err
+	}
+	s.lastError = ""
+	return nil
+}
+
+// sync 是 Sync 的主体；失败路径统一交给 Sync 记录原因。
+func (s *Syncer) sync(ctx context.Context) error {
 	envelope, err := s.Source.Fetch(ctx)
 	if err != nil {
 		s.failures++

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/config"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credentialsync"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/identity"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/logging"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/panel"
@@ -400,5 +402,131 @@ func TestRunPackageExports(t *testing.T) {
 	// 不写 --export 时只打印用法，不写文件。
 	if err := runPackage(nil); err != nil {
 		t.Errorf("不带 --export 时不该报错：%v", err)
+	}
+}
+
+// TestGatewayCipherFallsBackToClientKey 是「出门在外用不了」的回归测试。
+//
+// 客户端机器按设计不装 WorkBuddy，所以桌面端与 WORKBUDDY_AT_REST_SECRET
+// 都取不到密钥。没有这条兜底，切换后的网关模式会在启动第一步就报
+// 「找不到 WorkBuddy 可执行文件，无法获取 at-rest 根密钥」——
+// 同步过来的凭证一个都用不上。取桌面端密钥那一步由参数注入，
+// 因为本机装了 WorkBuddy，走真路径永远成功、碰不到兜底分支。
+func TestGatewayCipherFallsBackToClientKey(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	noDesktop := func() (*atrest.Cipher, error) {
+		return nil, fmt.Errorf("找不到 WorkBuddy 可执行文件")
+	}
+
+	// 还没有客户端密钥：必须报错，而不是默默新建一把。
+	// 新建会让重新封装的信封换 keyId，与同步来的那份对不上。
+	if _, err := gatewayCipherWith(noDesktop); err == nil {
+		t.Fatal("既没有桌面端密钥、也没有客户端密钥时应当报错")
+	}
+
+	// 客户端同步时会写下自己那把密钥（见 clientCipher），此后要有兜底。
+	secret := "AOhvbmNlLWNsaWVudC1hdC1yZXN0LXNlY3JldC1rZXk9"
+	if _, err := appdir.EnsureDir(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(appdir.ClientAtRestPath(), []byte(secret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cipher, err := gatewayCipherWith(noDesktop)
+	if err != nil {
+		t.Fatalf("应当退回客户端自己的密钥，却报错：%v", err)
+	}
+	want, err := atrest.NewCipher(secret)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cipher.KeyID() != want.KeyID() {
+		t.Errorf("退回应使用客户端自己的密钥：keyID=%s，期望 %s", cipher.KeyID(), want.KeyID())
+	}
+}
+
+// TestOutingFlowWorksWithoutWorkBuddy 是「出门在外用不了」的端到端回归测试。
+//
+// 完整走一遍：客户端同步到一份副本 → 出门前切到网关模式 → 在没有装
+// WorkBuddy 的机器上把网关模式起起来 → 真的读出令牌。
+//
+// 两个环境变量的作用：WORKBUDDY_ELECTRON_PATH 指一个不存在的文件，
+// 让 electronCandidates 返回空——这就是客户端机器的样子（它按设计不装
+// WorkBuddy），于是 atrest.Shared 必然失败、必须走客户端自己那把密钥。
+// 这台开发机装了 WorkBuddy，不这样做的话测的是桌面端那条路，压根碰不到缺口。
+func TestOutingFlowWorksWithoutWorkBuddy(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("WORKBUDDY_AT_REST_SECRET", "")
+	t.Setenv("WORKBUDDY_ELECTRON_PATH", filepath.Join(dir, "nonexistent-electron"))
+	if _, err := appdir.EnsureDir(); err != nil {
+		t.Fatal(err)
+	}
+
+	// 1) 客户端同步到的那份副本：用**客户端自己的**密钥重新封装过的明文登录态。
+	//    这里直接构造，同步本身由 credentialsync 的测试覆盖。
+	plain := map[string]any{
+		"auth": map[string]any{
+			"accessToken":  "plain-access-token",
+			"refreshToken": "plain-refresh-token",
+			"expiresAt":    float64(time.Now().Add(30 * 24 * time.Hour).UnixMilli()),
+		},
+	}
+	sealed, err := sealWithClientCipher(plain)
+	if err != nil {
+		t.Fatalf("封装副本失败：%v", err)
+	}
+	if err := credentialsync.Save(appdir.ClientCredentialPath(), credentialsync.LocalFile{
+		Epoch: 7, SyncedAt: time.Now(), Credential: sealed,
+	}); err != nil {
+		t.Fatalf("写副本失败：%v", err)
+	}
+
+	// 2) 出门前切到网关模式
+	if err := SwitchToGateway(); err != nil {
+		t.Fatalf("切换失败：%v", err)
+	}
+	if _, err := os.Stat(appdir.LocalAuthPath()); err != nil {
+		t.Fatalf("切换后应当有本地登录态：%v", err)
+	}
+
+	// 3) 在没有 WorkBuddy 的机器上启动网关模式
+	logger, err := logging.New(filepath.Join(dir, "test.log"), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = logger.Close() })
+	device, err := identity.LoadDevice(appdir.DevicePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	overrides, err := catalog.OpenStore(appdir.ModelOverridesPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts, err := buildGatewayRuntime(
+		&config.Config{Mode: config.ModeGateway}, logger, device, overrides)
+	if err != nil {
+		t.Fatalf("没有 WorkBuddy 的机器上起不来网关模式：%v", err)
+	}
+
+	// 4) 真的能读出令牌——证明用的是同一把密钥（同步时封、启动时解）。
+	headers, err := parts.credential.Headers()
+	if err != nil {
+		t.Fatalf("读令牌失败：%v", err)
+	}
+	if !strings.HasPrefix(headers["Authorization"], "Bearer plain-access-token") {
+		t.Errorf("Authorization 头不对：%q", headers["Authorization"])
+	}
+
+	// 5) 写出去的那份不能是明文：磁盘上那份文件就是本机的账号凭据。
+	raw, err := os.ReadFile(appdir.LocalAuthPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "plain-access-token") ||
+		strings.Contains(string(raw), "plain-refresh-token") {
+		t.Error("本地登录态里出现了明文令牌——它必须先用自己的密钥封好再落盘")
 	}
 }

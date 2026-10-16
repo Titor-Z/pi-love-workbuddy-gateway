@@ -127,7 +127,7 @@ func buildGatewayRuntime(cfg *config.Config, logger *logging.Logger,
 	if err != nil {
 		return nil, err
 	}
-	cipher, err := atrest.Shared("")
+	cipher, err := gatewayCipher()
 	if err != nil {
 		return nil, err
 	}
@@ -148,6 +148,38 @@ func buildGatewayRuntime(cfg *config.Config, logger *logging.Logger,
 		return nil, err
 	}
 	return parts, nil
+}
+
+// gatewayCipher 取网关模式要用的 at-rest 密钥。
+//
+// 正常情况下它来自 WorkBuddy 桌面端（或环境变量）——那台机器装过客户端。
+// 但**从客户端切过来的机器上两者都没有**：客户端按设计不装 WorkBuddy，
+// 它自己那把密钥存在 appdir.ClientAtRestPath()。没有这条兜底，
+// 切换后的网关模式会在启动第一步就报「找不到 WorkBuddy 可执行文件」，
+// 同步过来的凭证根本用不上——也就是「出门在外用不了」。
+//
+// 这里**只读**已存在的客户端密钥，不新建：新建一把会让重新封装的信封换 keyId，
+// 该生成密钥的时机是客户端第一次同步（见 clientCipher）。
+func gatewayCipher() (*atrest.Cipher, error) {
+	return gatewayCipherWith(func() (*atrest.Cipher, error) { return atrest.Shared("") })
+}
+
+// gatewayCipherWith 把「取桌面端密钥」抽成参数，让兜底分支可测——
+// 本机装了 WorkBuddy，atrest.Shared 会成功，直接测 gatewayCipher 走不到兜底。
+func gatewayCipherWith(desktop func() (*atrest.Cipher, error)) (*atrest.Cipher, error) {
+	cipher, err := desktop()
+	if err == nil {
+		return cipher, nil
+	}
+	secret, readErr := readClientSecret(appdir.ClientAtRestPath())
+	if readErr != nil {
+		return nil, readErr
+	}
+	if secret == "" {
+		return nil, fmt.Errorf("%w；这台机器也没有同步过来的客户端密钥，"+
+			"请先在客户端模式下完成一次凭证同步", err)
+	}
+	return atrest.NewCipher(secret)
 }
 
 // buildClientRuntime 装配客户端模式：把请求转发给网关。
@@ -655,10 +687,12 @@ func text(obj map[string]any, key string) string {
 // localAuthPath 是切到网关模式后写的登录态文件路径。
 func localAuthPath() string { return appdir.LocalAuthPath() }
 
-// writeLocalAuthFile 把明文登录态写成本机文件。
+// writeLocalAuthFile 把登录态写成本机文件。
 //
 // 权限 0600：这份文件就是账号凭据。之后 credential.Manager 会按
 // 「以文件为准」的既有逻辑读它，包含与桌面端共用时的自动跟随。
+// 传进来的文档按原样落盘，**封装是调用方的事**——SwitchToGateway
+// 那一条路径必须先用本机密钥封好。
 func writeLocalAuthFile(doc map[string]any) error {
 	raw, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
@@ -696,7 +730,15 @@ func SwitchToGateway() error {
 	if problem != problemNone {
 		return fmt.Errorf("%s", problem)
 	}
-	if err := writeLocalAuthFile(plain); err != nil {
+	// 落盘前用本机密钥重新封装。openClientCredential 拿到的是**明文**，
+	// 而它自己的注释写着「调用方不得落盘」——这里以前直接写下去了，
+	// 把唯一的账号凭据摊在磁盘上。封装用的就是接下去读它的那把密钥
+	// （见 gatewayCipher），两边对得上。
+	sealed, err := sealWithClientCipher(plain)
+	if err != nil {
+		return fmt.Errorf("封装登录态失败：%w", err)
+	}
+	if err := writeLocalAuthFile(sealed); err != nil {
 		return err
 	}
 	return credentialsync.SetActive(appdir.ClientCredentialPath(), true)

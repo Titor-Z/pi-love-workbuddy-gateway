@@ -329,8 +329,23 @@ type syncResponse struct {
 }
 
 // handleSync 返回凭证同步开关与本机副本状态。
+//
+// 两种模式读的不是同一件东西：
+//   - 网关模式：开关来自本地偏好文件，版本号就是网关自己的 epoch；
+//   - 客户端模式：开关在**网关**那台机器上，本机读不到也不该假读本地文件——
+//     状态以同步器为准，它知道上次是否失败、还要多久重试。
+//     否则同步一直失败时面板只剩一句「尚无副本」，用户无从判断差在哪。
 func (p *Panel) handleSync(w http.ResponseWriter, _ *http.Request) {
 	response := syncResponse{Enabled: ReadSyncPreference()}
+	if p.deps.Syncer != nil {
+		snapshot := p.deps.Syncer.Snapshot()
+		// 这里的「网关凭证版本」是上次从网关拉到的 epoch，
+		// 不是本机 epoch 文件里的那个（后者只在切过网关模式后才有意义）。
+		response.GatewayEpoch = snapshot.LastEpoch
+		response.Local = &snapshot
+		writeJSON(w, http.StatusOK, response)
+		return
+	}
 	if epoch, err := credentialsync.ReadEpoch(appdir.CredentialEpochPath()); err == nil {
 		response.GatewayEpoch = epoch
 	}

@@ -306,3 +306,37 @@ func TestSyncDoesNotPush(t *testing.T) {
 		t.Error("源被清空了")
 	}
 }
+
+// TestSnapshotReportsLastError 同步失败时面板必须能拿到原因。
+//
+// 失败时本机没有副本，面板只剩「尚无副本」四个字，用户无从判断
+// 是网关没开开关、还是网不通、还是本机密钥坏了——同步失败本来就是
+// 最需要一句原因的场景，它不能只留在日志里。
+func TestSnapshotReportsLastError(t *testing.T) {
+	source := &fakeSource{err: errors.New("网关未开放凭证同步")}
+	syncer, _, _ := newTestSyncer(t, source)
+
+	if err := syncer.Sync(context.Background()); err == nil {
+		t.Fatal("源报错时 Sync 应当返回错误")
+	}
+	snapshot := syncer.Snapshot()
+	if snapshot.LastError != "网关未开放凭证同步" {
+		t.Errorf("LastError = %q，期望源给的原因", snapshot.LastError)
+	}
+	if snapshot.Failures != 1 {
+		t.Errorf("Failures = %d，期望 1", snapshot.Failures)
+	}
+
+	// 成功一次后原因要清掉，否则面板会一直报一条已经过去的错。
+	source.err = nil
+	source.envelope = Envelope{
+		Epoch:      3,
+		Credential: map[string]any{"auth": map[string]any{"accessToken": "t"}},
+	}
+	if err := syncer.Sync(context.Background()); err != nil {
+		t.Fatalf("恢复后应当同步成功：%v", err)
+	}
+	if got := syncer.Snapshot().LastError; got != "" {
+		t.Errorf("成功之后 LastError 应清空，得到 %q", got)
+	}
+}

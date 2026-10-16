@@ -643,6 +643,19 @@
           {switching ? "检查中…" : "检查能否切到网关模式"}
         </button>
       </div>
+      <!-- 同步失败必须在这里说清楚。没有这一段的话，失败时本机没有副本，
+           面板只剩「尚无副本」四个字，用户无从判断是网关没开开关、
+           网不通、还是本机密钥坏了。 -->
+      {#if sync.local?.last_error}
+        <div class="notice warn" style="margin-top:12px">
+          上次同步失败：{sync.local.last_error}
+          {#if sync.local.failures > 1}
+            <span class="dim">
+              （已连续失败 {sync.local.failures} 次，{sync.local.next_attempt_in} 后重试）
+            </span>
+          {/if}
+        </div>
+      {/if}
       {#if switchCheck}
         {#if switchCheck.can_switch}
           <div class="notice" style="margin-top:12px">
