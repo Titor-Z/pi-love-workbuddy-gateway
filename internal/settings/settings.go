@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 )
 
@@ -36,12 +38,25 @@ const (
 	MaxRetentionDays = 365
 )
 
+// DefaultCheckinTime 是自动签到的默认时刻。
+// 选上午 9 点：签到按自然日算，早签早安心，也不会因为机器晚开而错过。
+const DefaultCheckinTime = "09:00"
+
 // Settings 是面板可改的运行偏好。
 type Settings struct {
 	// LogPageSize 是日志页每页显示的条数。
 	LogPageSize int `json:"log_page_size"`
 	// LogRetentionDays 是事件日志的保留天数，超过的分片会被删除。
 	LogRetentionDays int `json:"log_retention_days"`
+
+	// CheckinEnabled 是是否每天自动签到。
+	CheckinEnabled bool `json:"checkin_enabled"`
+	// CheckinTime 是每天自动签到的时间，形如 "09:00"（本地时区）。
+	CheckinTime string `json:"checkin_time"`
+	// CheckinRemind 是「当天还没签到时，在首页通知区提醒我」。
+	// 它只管「提不提醒」，不管「怎么补」——补签入口官方还没找到，
+	// 所以这里不碰那个动作（见 docs/workbuddy-checkin.md）。
+	CheckinRemind bool `json:"checkin_remind"`
 }
 
 // Default 返回默认偏好。
@@ -49,6 +64,8 @@ func Default() Settings {
 	return Settings{
 		LogPageSize:      DefaultPageSize,
 		LogRetentionDays: DefaultRetentionDays,
+		CheckinEnabled:   false,
+		CheckinTime:      DefaultCheckinTime,
 	}
 }
 
@@ -64,6 +81,10 @@ func Normalize(value Settings) Settings {
 	if value.LogRetentionDays < MinRetentionDays || value.LogRetentionDays > MaxRetentionDays {
 		value.LogRetentionDays = DefaultRetentionDays
 	}
+	// 空串也当非法：读文件时要把缺失的这一项补成默认值（与 Default() 一致）。
+	if value.CheckinTime == "" || !validClock(value.CheckinTime) {
+		value.CheckinTime = DefaultCheckinTime
+	}
 	return value
 }
 
@@ -75,7 +96,36 @@ func Validate(value Settings) error {
 	if value.LogRetentionDays < MinRetentionDays || value.LogRetentionDays > MaxRetentionDays {
 		return fmt.Errorf("日志保留天数要在 %d～%d 之间", MinRetentionDays, MaxRetentionDays)
 	}
+	if !validClock(value.CheckinTime) {
+		return fmt.Errorf("签到时间要写成 HH:MM（如 09:00）")
+	}
 	return nil
+}
+
+// validClock 检查 "HH:MM" 形式的时刻是否合法。
+// 不接受单独的分钟或带秒的写法——自动签到不需要那么精确，
+// 放宽只会让用户以为它认了而其实没认。
+//
+// 空串算合法：签到时间是后加的字段，老的调用方不带它。
+// 真正的默认值由 Normalize 补（读文件时）与调度器兜（NextRun 里）。
+func validClock(value string) bool {
+	if value == "" {
+		return true
+	}
+	parts := strings.Split(value, ":")
+	if len(parts) != 2 {
+		return false
+	}
+	hour, err := strconv.Atoi(parts[0])
+	if err != nil || hour < 0 || hour > 23 {
+		return false
+	}
+	minute, err := strconv.Atoi(parts[1])
+	if err != nil || minute < 0 || minute > 59 {
+		return false
+	}
+	// 拒绝 "9:00" 这类非零填充写法，保证显示与输入一致。
+	return len(parts[0]) == 2 && len(parts[1]) == 2
 }
 
 // Store 是带并发安全的偏好读写器。网关要边跑边读它（清理任务看保留天数，
@@ -121,6 +171,12 @@ func (s *Store) Get() Settings {
 func (s *Store) Update(next Settings) error {
 	if err := Validate(next); err != nil {
 		return err
+	}
+	// 缺失的时刻补默认值后再落盘：否则存盘的是空串，
+	// 重开时被 Normalize 补成默认，往返就不一致了（写进去什么、
+	// 读出来应该是同一个东西）。
+	if next.CheckinTime == "" {
+		next.CheckinTime = DefaultCheckinTime
 	}
 	raw, err := json.MarshalIndent(next, "", "  ")
 	if err != nil {

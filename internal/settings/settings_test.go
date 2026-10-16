@@ -89,7 +89,10 @@ func TestUpdatePersistsAndTakesEffect(t *testing.T) {
 	if err := store.Update(next); err != nil {
 		t.Fatalf("Update 失败：%v", err)
 	}
-	if store.Get() != next {
+	// 没填的签到时刻会被补成默认值后再落盘，所以拿到的不是原样传进去的那份。
+	expected := next
+	expected.CheckinTime = DefaultCheckinTime
+	if store.Get() != expected {
 		t.Errorf("改完没有立即生效：%+v", store.Get())
 	}
 
@@ -102,7 +105,7 @@ func TestUpdatePersistsAndTakesEffect(t *testing.T) {
 	if err := json.Unmarshal(raw, &parsed); err != nil {
 		t.Fatalf("落盘的不是合法 JSON：%v", err)
 	}
-	if parsed != next {
+	if parsed != expected {
 		t.Errorf("落盘内容不对：%+v", parsed)
 	}
 
@@ -111,7 +114,7 @@ func TestUpdatePersistsAndTakesEffect(t *testing.T) {
 	if err != nil {
 		t.Fatalf("重开失败：%v", err)
 	}
-	if reopened.Get() != next {
+	if reopened.Get() != expected {
 		t.Errorf("重开后读到的不是保存的值：%+v", reopened.Get())
 	}
 

@@ -73,6 +73,8 @@ export const api = {
   syncOverrides: (prefer) => request("POST", "/api/overrides/sync", prefer ? { prefer } : {}),
   settings: () => request("GET", "/api/settings"),
   saveSettings: (settings) => request("PUT", "/api/settings", settings),
+  checkin: () => request("GET", "/api/checkin"),
+  runCheckin: () => request("POST", "/api/checkin"),
   relay: () => request("GET", "/api/relay"),
   revokeDevice: (id) => request("POST", `/api/devices/revoke?id=${encodeURIComponent(id)}`),
   unrevokeDevice: (id) => request("POST", `/api/devices/unrevoke?id=${encodeURIComponent(id)}`),

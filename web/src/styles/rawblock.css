@@ -951,6 +951,7 @@ input[type="search"],
 input[type="number"],
 input[type="password"],
 input[type="date"],
+input[type="time"],
 select,
 textarea {
   font-family: var(--font-mono);
@@ -971,6 +972,7 @@ input[type="search"],
 input[type="number"],
 input[type="password"],
 input[type="date"],
+input[type="time"],
 select {
   height: var(--control-h);
   padding: 0 10px;

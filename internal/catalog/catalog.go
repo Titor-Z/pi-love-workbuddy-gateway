@@ -202,7 +202,7 @@ type Entry struct {
 	Label     Label              // 合成出来的费用标记
 	Alias     string             // 用户设的展示别名
 	Hidden    bool               // 用户要求从列表里隐藏
-	Thinking  map[string]*string // 用户设的思考档位映射（pi 的形状）
+	Thinking  map[string]*string // pi 的思考档位映射（自动推导 + 用户覆盖）
 	UpdatedAt string             // 覆盖项最后改动时间
 	UpdatedBy string             // 覆盖项最后改动的机器
 }
@@ -229,7 +229,7 @@ func Build(models []upstream.ModelInfo, overrides *Overrides) []Entry {
 			Label:     labelOf(model, override),
 			Alias:     override.Alias,
 			Hidden:    override.Hidden,
-			Thinking:  override.ThinkingLevelMap,
+			Thinking:  ThinkingLevelMap(model, override.ThinkingLevelMap),
 			UpdatedAt: override.UpdatedAt,
 			UpdatedBy: override.UpdatedBy,
 		})
@@ -328,6 +328,101 @@ func badgeOf(tags []string) string {
 var thinkingLevels = map[string]bool{
 	"off": true, "minimal": true, "low": true, "medium": true,
 	"high": true, "xhigh": true, "max": true,
+}
+
+// ThinkingLevelMap 给出这个模型在 pi 里的思考档位映射。
+//
+// 这是本文件最要紧的一件事，因为**网关生成的配置里缺了它会让 pi 直接报错**：
+//
+//  1. 用户选 off（或没选，默认就是 off）时，pi-ai 把它翻成「不发 reasoning_effort」
+//     （openai-completions.js: `clampedReasoning === "off" ? undefined : ...`）。
+//  2. 后端的 `glm-5.1` 恰恰是**不发就 400**（它的 `reasoning` 只有 `effort:"medium"`，
+//     意思是「只有这一个档位，你得显式给」），报 code 11150「模型不支持该思考强度」。
+//     实测：`pi --model glm-5.1 --thinking off` 直接 400。
+//
+// 反过来 `deepseek-v4.1-flash` 是**发 `off` 就 400**（code 11133）。
+// 所以两侧都不能裸奔。
+//
+// 修法的关键是一条 pi 的隐含语义——**`undefined`（省略键）等于"支持"**：
+// pi-ai 的 getSupportedThinkingLevels 只看 `map[level] === null` 才排除该档位，
+// 值为 `undefined` 时照样算可用。所以「只写支持的档位」是不够的：
+// 省略掉的 `off` 仍然是可用档位，用户选它时 pi 还是什么都不发，回到 400。
+//
+// 于是这里**把 7 个键全部显式写出**，不支持的一律 `null`：
+//
+//	off / minimal 恒为 null（后端没有这两个拼写，我们没法表达"关闭思考"，
+//	只能让 pi 把用户的选择 clamp 到最近的可用档位并真的发出去）。
+//	其余档位：后端声明了就映射成自己，没声明就是 null。
+//
+// 候选集合的取法：
+//   - 有 `supportedEfforts`：那是硬校验的真集合，只认这些。
+//   - 只有 `effort`（无 supportedEfforts）：后端不校验档位，但要求你必须发一个，
+//     所以只上这一个值。
+//   - 两者都没有：返回 nil，由 pi 的 `reasoning:false` 处理。
+//
+// 用户覆盖表按**逐键合并**优先：只想关掉 max 时，其余档位继续用推导结果。
+func ThinkingLevelMap(model upstream.ModelInfo, override map[string]*string) map[string]*string {
+	derived := derivedThinkingMap(model)
+	if len(override) == 0 {
+		return derived
+	}
+	merged := make(map[string]*string, len(piThinkingLevels))
+	for _, level := range piThinkingLevels {
+		if value, ok := override[level]; ok {
+			merged[level] = value // 用户说了算（nil 表示关掉这个档位）
+			continue
+		}
+		merged[level] = derived[level] // 推导结果里 7 个键齐备
+	}
+	// 用户把所有档位都关掉时（全 nil），pi 会 clamp 到 off 而不发任何值。
+	// 那不是我们要的状态，退回纯推导。
+	for _, value := range merged {
+		if value != nil {
+			return merged
+		}
+	}
+	return derived
+}
+
+// derivedThinkingMap 按后端声明推导出档位映射，7 个键齐备、不支持的是 null。
+func derivedThinkingMap(model upstream.ModelInfo) map[string]*string {
+	candidates := model.Efforts
+	if len(candidates) == 0 && model.DefaultEffort != "" {
+		candidates = []string{model.DefaultEffort}
+	}
+	if len(candidates) == 0 {
+		return nil // 不支持思考：pi 只看 reasoning:false
+	}
+	allowed := make(map[string]bool, len(candidates))
+	for _, level := range candidates {
+		allowed[level] = true
+	}
+	mapped := make(map[string]*string, len(piThinkingLevels))
+	for _, level := range piThinkingLevels {
+		if !allowed[level] {
+			mapped[level] = nil // 显式 null：pi 才会把这个档位从可用集合里去掉
+			continue
+		}
+		value := level
+		mapped[level] = &value
+	}
+	// 候选里若含 off，上面会把它映射成自身；后端实际不吃 "off" 这个档位拼写。
+	// 这里直接覆盖回 null——我们从不主动发 "off"。
+	mapped["off"] = nil
+	mapped["minimal"] = nil
+	return mapped
+}
+
+// piThinkingLevels 是 pi 认的档位键，顺序与 pi 的 clamp 顺序一致。
+var piThinkingLevels = []string{"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+// thinkingFallback 返回「这个模型在无法直接映射某个档位时该发什么」。
+// 优先取最低的声明档位，其次取默认档位；都没有则不返回（不支持思考）。
+func thinkingFallback(model upstream.ModelInfo) string {
+	if len(model.Efforts) > 0 {
+		return model.Efforts[0]
+	}
+	return model.DefaultEffort
 }
 
 // Validate 检查覆盖表是否合法。写入前必须过这一关：

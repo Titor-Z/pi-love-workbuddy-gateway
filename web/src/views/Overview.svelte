@@ -8,6 +8,10 @@
 
   let usage = $state(null);
   let billing = $state(null);
+  // 签到提醒。后端判好了「该不该提」，这里只负责画。
+  // 它拉不到时静默——首页的主要职责不是签到，缺一条提醒不该报错。
+  let checkinReminder = $state("");
+  let checkinAvailable = $state(false);
   let error = $state("");
   let loading = $state(true);
   let days = $state(14);
@@ -24,13 +28,18 @@
   async function load() {
     loading = true;
     error = "";
-    // 两个接口并行拉：余额与用量互不依赖，串行只是白等。
-    const results = await Promise.allSettled([api.usage(days), api.billing()]);
+    // 三个接口并行拉：它们互不依赖，串行只是白等。
+    const results = await Promise.allSettled([api.usage(days), api.billing(), api.checkin()]);
 
     if (results[0].status === "fulfilled") usage = results[0].value;
     if (results[1].status === "fulfilled") billing = results[1].value;
+    if (results[2].status === "fulfilled") {
+      checkinReminder = results[2].value?.reminder ?? "";
+      checkinAvailable = results[2].value?.available ?? false;
+    }
 
-    // 余额失败不致命（账单接口偶尔抽风），用量失败才值得报错。
+    // 余额与签到失败不致命（账单接口偶尔抽风、客户端模式本来就没签到），
+    // 用量失败才值得报错。
     const failures = results.filter((r) => r.status === "rejected").map((r) => r.reason.message);
     if (results[0].status === "rejected") error = failures[0];
     else if (failures.length) error = `余额读取失败：${failures[0]}`;
@@ -123,6 +132,42 @@
   <div class="notice error">{error}</div>
 {/if}
 
+<!-- 通知区：首页的常驻提醒都放这里。
+     以后新增一类首页提醒就多一个块，不另开一处——用户只需要在一个地方看。
+     每块保持「一句话 + 去哪看详情」（design-v2 的提示框职责边界）。
+     没有可说的就不渲染整个区，不占屏幕。 -->
+{#if checkinReminder || limits.length > 0}
+  <section class="section">
+    <header>
+      <h2>通知</h2>
+      <span class="hint">首页常驻提醒</span>
+    </header>
+
+    {#if checkinReminder}
+      <div class="notice warn">
+        <strong>签到还没领</strong>：{checkinReminder}
+        <a href="#/checkin">去签到 →</a>
+      </div>
+    {/if}
+
+    {#if limits.length > 0}
+      <div class="notice warn limits">
+        <strong>有模型正在频率限制中</strong>（{limits.length} 个）：
+        <ul>
+          {#each limits as limit (limit.model)}
+            <li>
+              <code>{limit.model}</code> 预计 <strong title={fmt.time(limit.reset_at)}
+                >{countdown(limit.reset_at)}</strong
+              > 后恢复
+              <span class="hint">（{limit.since} 撞墙；也可以换其他模型继续用）</span>
+            </li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
+  </section>
+{/if}
+
 <section class="section">
   <header>
     <h2>总览</h2>
@@ -158,22 +203,6 @@
       <div class="sub">确定拦截 {fmt.percent(totals.block_rate)} · 疑似拒答 {totals.refused} 次</div>
     </div>
   </div>
-
-  {#if limits.length > 0}
-    <div class="notice warn limits">
-      <strong>有模型正在频率限制中</strong>（{limits.length} 个）：
-      <ul>
-        {#each limits as limit (limit.model)}
-          <li>
-            <code>{limit.model}</code> 预计 <strong title={fmt.time(limit.reset_at)}
-              >{countdown(limit.reset_at)}</strong
-            > 后恢复
-            <span class="hint">（{limit.since} 撞墙；也可以换其他模型继续用）</span>
-          </li>
-        {/each}
-      </ul>
-    </div>
-  {/if}
 </section>
 
 <section class="section">

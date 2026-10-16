@@ -74,7 +74,10 @@ func TestSettingsPutPersists(t *testing.T) {
 	if err := json.Unmarshal(recorder.Body.Bytes(), &payload); err != nil {
 		t.Fatalf("解析响应失败：%v", err)
 	}
-	if payload.Settings != next {
+	// 没填的签到时刻会被补成默认值后再落盘，所以拿到的不是原样传进去的那份。
+	expected := next
+	expected.CheckinTime = settings.DefaultCheckinTime
+	if payload.Settings != expected {
 		t.Errorf("返回值不是刚保存的：%+v", payload.Settings)
 	}
 
@@ -82,7 +85,7 @@ func TestSettingsPutPersists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("重开偏好失败：%v", err)
 	}
-	if reopened.Get() != next {
+	if reopened.Get() != expected {
 		t.Errorf("落盘的不是刚保存的值：%+v", reopened.Get())
 	}
 }

@@ -144,6 +144,8 @@ pi --model workbuddy/step-5-preview "帮我看看这个项目"
 | `pi-love-workbuddy-gateway gateway -d -addr 0.0.0.0:8788` | 同上，写全 |
 | `pi-love-workbuddy-gateway client -d -addr 192.168.1.5:8788` | 客户端模式。转发给网关 |
 | `pi-love-workbuddy-gateway package --export [目录]` | 把内嵌的 pi 扩展写进 pi 的扩展目录（不带目录时写本机那份） |
+| `pi-love-workbuddy-gateway checkin` | 给这个账号签到一次，结果打一行 JSON（不需求网关在跑） |
+| `pi-love-workbuddy-gateway checkin --status` | 只查今天签没签，不真签到 |
 | `pi-love-workbuddy-gateway -help` | 用法 |
 | `pi-love-workbuddy-gateway -version` | 打印版本号 |
 
@@ -936,6 +938,23 @@ npm run dev       # 可选：热更新，需要网关已经在跑
 字体（Archivo Black / Work Sans / Space Mono 的 latin 子集，共 79 KB）也是自托管的，
 嵌入二进制。**项目承诺不向任何第三方回传数据，所以不能用字体 CDN** ——
 那会把这句话变成假话。三个字体都没有中文字形，中文走系统回退；嵌 CJK 要 5～15 MB，不值得。
+
+### 实测笔记
+
+项目文档里有两份「与后端打交道」的实测记录。它们的共同规矩是：
+**只写下真打过后端、且有原始回显的结论**；转述的、或从字段名推测的一律标「未证实」。
+
+| 文档 | 内容 |
+|---|---|
+| [`docs/workbuddy-protocol.md`](docs/workbuddy-protocol.md) | 上游协议：模型目录的两份 roster、`reasoning_effort` 的两个方向、错误码表、**哨兵法**、pi 侧的语义与两层缓存 |
+| [`docs/workbuddy-checkin.md`](docs/workbuddy-checkin.md) | 签到：状态与签到接口、为什么必须带 `/v2`、「已签到」为什么是成功、补签为何不做 |
+
+其中两条值得单独提：
+
+- **哨兵法**：要判断某个参数是不是真的被后端校验，先发一个**绝不可能的值**。
+  被拒说明真校验；被接受则说明**根本不校验**，那么「所有档位都 OK」是假象。
+- **不要靠读依赖库源码推断行为**。这一轮查 `--thinking off` 报错时，我靠读 pi-ai
+  源码推断过两次，两次都不准；起个透明代理抓一份真请求，一次就清楚了。
 
 ### 它只连通这几个后端接口
 

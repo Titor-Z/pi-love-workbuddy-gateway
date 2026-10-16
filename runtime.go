@@ -31,6 +31,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relaytls"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/settings"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/upstream"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/workbuddy"
 )
 
 // runtime 是两种模式装配完后共用的东西。
@@ -45,8 +46,11 @@ type runtime struct {
 	// 客户端模式**刻意不加载凭证**：P0 的客户端手上不该有令牌。
 	credential *credential.Manager
 	billing    *billing.Client
-	authFile   string
-	keyID      string // 解密密钥指纹，仅网关模式有
+	// checkin 是签到服务。只有网关模式才有——它需要账号凭证，
+	// 而客户端模式按设计手上没有。
+	checkin  *workbuddy.Service
+	authFile string
+	keyID    string // 解密密钥指纹，仅网关模式有
 
 	device      *identity.Device
 	fingerprint string
@@ -132,10 +136,15 @@ func buildGatewayRuntime(cfg *config.Config, logger *logging.Logger,
 		return nil, err
 	}
 	cred := credential.NewManager(authFile, cipher, logger.Printf, "")
+	checkinStore, err := workbuddy.OpenStore(appdir.CheckinPath())
+	if err != nil {
+		return nil, err
+	}
 	parts := &runtime{
 		backend:    upstream.NewClient(cred, ""),
 		credential: cred,
 		billing:    billing.NewClient(cred, ""),
+		checkin:    workbuddy.NewService(workbuddy.NewClient(cred, ""), checkinStore),
 		authFile:   cred.Path(),
 		keyID:      cipher.KeyID(),
 		device:     device,
@@ -516,6 +525,67 @@ func runJournalPrune(ctx context.Context, events *journal.Journal,
 		case <-ticker.C:
 			prune()
 		}
+	}
+}
+
+// 签到定时器最多重算间隔：偏好可能在等待期间被改（时间改早、或开关被关），
+// 一整夜不重算的话，晚上把时间改成第二天早上也要等一天才发现没生效。
+const checkinRecheckInterval = time.Hour
+
+// runCheckinScheduler 每天在偏好设定的时刻签到一次。
+//
+// 它只是**其中一个调用方**：签到本身是无状态的「执行一次」动作
+// （internal/workbuddy），这里只负责「什么时候叫它」。外部定时任务看板
+// 可以完全不管这个循环，直接 exec `checkin` 子命令。
+//
+// 用「算下一个时刻」而不是「每 N 小时轮询」：后者会让签到时间随机漂移，
+// 而用户设的就是一个具体的钟点。
+func runCheckinScheduler(ctx context.Context, service *workbuddy.Service,
+	preferences *settings.Store, logger *logging.Logger) {
+
+	for {
+		if !preferences.Get().CheckinEnabled {
+			// 关着的时候不空转，但仍要定期回来看开关有没有被打开。
+			if !sleepCtx(ctx, checkinRecheckInterval) {
+				return
+			}
+			continue
+		}
+		next := workbuddy.NextRun(time.Now(), preferences.Get().CheckinTime)
+		// 一小时内就重算一次，以便偏好一改就能及时生效。
+		wait := time.Until(next)
+		if wait > checkinRecheckInterval {
+			wait = checkinRecheckInterval
+		}
+		if !sleepCtx(ctx, wait) {
+			return
+		}
+		// 睡醒后重新算一次：没到点就回去继续等（上面那个上限造成的），
+		// 到了才真签。
+		if time.Now().Before(workbuddy.NextRun(time.Now(), preferences.Get().CheckinTime)) {
+			continue
+		}
+		result := service.RunOnce(ctx)
+		if result.Done {
+			logger.Printf("自动签到：%s（连续 %d 天）", result.Message, result.StreakDays)
+		} else {
+			logger.Printf("⚠️ 自动签到失败：%s", result.Message)
+		}
+	}
+}
+
+// sleepCtx 等待一段时间；ctx 取消时立刻返回 false。
+func sleepCtx(ctx context.Context, duration time.Duration) bool {
+	if duration <= 0 {
+		return true
+	}
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 

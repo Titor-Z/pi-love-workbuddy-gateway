@@ -45,8 +45,11 @@ const JournalFileName = "gateway.jsonl"
 // 换文件名比引文件锁简单得多，也让「切换模式」这件事天然可解释。
 const ClientJournalFileName = "client.jsonl"
 
-// SettingsFileName 是面板可改的运行偏好（日志每页条数、保留天数）。
+// SettingsFileName 是面板可改的运行偏好（日志条数、保留天数、签到设置）。
 const SettingsFileName = "settings.json"
+
+// CheckinFileName 记录签到结论，只用于展示，不作判断依据。
+const CheckinFileName = "checkin.json"
 
 // JournalPrefixGateway / JournalPrefixClient 是两种模式的事件分片文件名前缀。
 // 分开是为了让同一台机器上两种模式各自的日志互不干扰。
@@ -133,6 +136,9 @@ func JournalDir() string { return join(Dir(), JournalDirName) }
 
 // SettingsPath 返回运行偏好文件的默认路径。
 func SettingsPath() string { return join(Dir(), SettingsFileName) }
+
+// CheckinPath 返回签到记录的存放路径。
+func CheckinPath() string { return join(Dir(), CheckinFileName) }
 
 // JournalPath 返回旧版网关模式单文件事件的路径，仅用于一次性迁移。
 func JournalPath() string { return join(Dir(), JournalFileName) }

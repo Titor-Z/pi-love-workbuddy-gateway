@@ -26,4 +26,13 @@ const (
 	// 注意：它返回的整数 CapacityRemain 是包的总量，**不随消耗变化**；
 	// 真正反映消耗的是 CycleCapacityRemainPrecise / CycleCapacityUsedPrecise。
 	BillingResourcePath = "/v2/billing/meter/get-user-resource"
+
+	// CheckinStatusPath 查签到状态。**必须带 /v2**：
+	// 不带 v2 的那条虽然也返回 200，但回的是空壳（active=false、streak_days=0），
+	// 与「没有签到活动」长得一模一样，照它判断会永远得到错的结论。
+	CheckinStatusPath = "/v2/billing/meter/checkin-activity-status"
+	// CheckinPath 执行签到。它是幂等的：今天已签到时返回 HTTP 400 + code 10001。
+	CheckinPath = "/v2/billing/meter/daily-checkin"
+	// StreakPath 查连续签到天数、补签卡余额与档位奖励。
+	StreakPath = "/activity/growth/streak"
 )

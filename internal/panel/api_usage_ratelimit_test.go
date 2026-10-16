@@ -61,7 +61,7 @@ func TestCollectActiveLimitsParsesBackendOffset(t *testing.T) {
 	}
 
 	// 仍然生效的：解析得出、且时间正确。
-	active := now.Add(2 * time.Hour).Format("2006-01-02 15:04:05") + " UTC+8"
+	active := now.Add(2*time.Hour).Format("2006-01-02 15:04:05") + " UTC+8"
 	got := collectActiveLimits([]journal.Record{
 		{Kind: journal.KindChat, Model: "hy3", RateLimited: true,
 			RateResetAt: active, Time: now.Add(-5 * time.Minute)},

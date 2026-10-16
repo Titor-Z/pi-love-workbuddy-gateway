@@ -23,6 +23,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/paircode"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/settings"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/webui"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/workbuddy"
 )
 
 // nonceHeader 是页面用来证明「我确实读过本进程生成的 HTML」的请求头。
@@ -87,7 +88,10 @@ type Deps struct {
 	Upstream   gateway.Backend
 	// Billing 是「余额从哪来」。网关模式是本地账单客户端，
 	// 客户端模式是经 relay 向网关取。抽成接口，面板不必知道是哪一种。
-	Billing   BillingSource
+	Billing BillingSource
+	// Checkin 是签到能力。只有网关模式非空——签到要账号凭证，
+	// 而客户端模式按设计手上没有凭证。
+	Checkin   CheckinSource
 	Overrides *catalog.Store
 	Journal   *journal.Journal
 	// OverridesSyncer 只在客户端模式非空：模型覆盖表要与网关对齐。
@@ -107,6 +111,19 @@ type BillingSource interface {
 // LocalBilling 把本地账单客户端接成 BillingSource（网关模式用）。
 type LocalBilling struct {
 	Client *billing.Client
+}
+
+// CheckinSource 是签到能力。
+//
+// 抽成接口而不是直接依赖 workbuddy.Service：面板只需要「查状态」、
+// 「签到一次」与「取历史记录」，不必知道背后是直连官方还是别的实现。
+type CheckinSource interface {
+	// CheckinStatus 查今天签到状态（只读）。
+	CheckinStatus(ctx context.Context) (workbuddy.Status, error)
+	// CheckinNow 执行一次签到（幂等）。
+	CheckinNow(ctx context.Context) (workbuddy.Result, error)
+	// CheckinRecent 返回最近的签到记录（只用于展示）。
+	CheckinRecent(limit int) []workbuddy.Record
 }
 
 // FetchBillingReport 读一次本机账单并转成对外表示。
@@ -166,6 +183,10 @@ func (p *Panel) Handler() http.Handler {
 	mux.HandleFunc("POST /api/overrides/sync", p.guarded(p.handleOverridesSync))
 	mux.HandleFunc("GET /api/settings", p.guarded(p.handleGetSettings))
 	mux.HandleFunc("PUT /api/settings", p.guarded(p.handlePutSettings))
+
+	// 签到：查状态 + 手动签一次。客户端模式一律可读但"不可用"的响应。
+	mux.HandleFunc("GET /api/checkin", p.guarded(p.handleCheckin))
+	mux.HandleFunc("POST /api/checkin", p.guarded(p.handleCheckinRun))
 
 	// 转发服务与设备管理。只在网关模式下有意义，客户端模式一律 501。
 	mux.HandleFunc("GET /api/relay", p.guarded(p.handleRelay))

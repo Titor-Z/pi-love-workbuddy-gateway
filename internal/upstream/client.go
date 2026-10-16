@@ -153,8 +153,19 @@ type ModelInfo struct {
 	SupportsImages   bool     // 是否支持图片输入
 	SupportsToolCall bool     // 是否支持工具调用
 	SupportsThinking bool     // 是否支持思考（推理）模式
-	Efforts          []string // 可选的思考档位
+	Efforts          []string // 可选思考档位（后端 supportedEfforts，硬校验的真集合）
+	DefaultEffort    string   // 默认思考档位（后端 effort，没给 supportedEfforts 时是唯一可发值）
 	Tags             []string // 后端打的标签，含促销标记
+}
+
+// HasEffort 判断后端是否声明了某个可选档位。
+func (m ModelInfo) HasEffort(level string) bool {
+	for _, effort := range m.Efforts {
+		if effort == level {
+			return true
+		}
+	}
+	return false
 }
 
 // Models 拉取实时模型目录。这个接口返回的目录比 WorkBuddy 客户端本地的
@@ -249,25 +260,56 @@ func (m rawModel) toInfo() ModelInfo {
 		SupportsToolCall: m.SupportsToolCall,
 		SupportsThinking: m.SupportsThinking,
 		Efforts:          parseEfforts(m.Reasoning),
+		DefaultEffort:    parseDefaultEffort(m.Reasoning),
 		Tags:             m.Tags,
 	}
 }
 
 // parseEfforts 从 reasoning 字段里取出可选思考档位。
 // 后端有两种写法：直接给字符串（默认档位），或给对象（含 supportedEfforts 数组）。
+// 只有后者构成「可选集合」——前者只有一个值，用户无从选择。
 func parseEfforts(raw json.RawMessage) []string {
-	if len(raw) == 0 {
-		return nil
+	return reasoningObject(raw).SupportedEfforts
+}
+
+// parseDefaultEffort 取出后端的默认思考档位。
+//
+// 它和 Efforts 的区别是**后端要不要显式收**：
+// `glm-5.1` 的 reasoning 是 `{"effort":"medium"}`（没有 supportedEfforts），
+// 实测**不发 reasoning_effort 反而 400**（code 11150），
+// 必须显式给 `medium`。所以这个值不能丢。
+func parseDefaultEffort(raw json.RawMessage) string {
+	parsed := reasoningObject(raw)
+	if parsed.DefaultEffort != "" {
+		return parsed.DefaultEffort
 	}
+	// 旧写法：reasoning 直接是一个字符串，那就是唯一的档位。
 	var asText string
 	if err := json.Unmarshal(raw, &asText); err == nil {
-		return nil // 只有默认档位，不构成可选集合
+		return asText
 	}
-	var asObject struct {
-		SupportedEfforts []string `json:"supportedEfforts"`
+	return ""
+}
+
+// reasoningSpec 是后端 reasoning 字段里我们关心的部分。
+// 两种形状（字符串 / 对象）都归一到这一个结构。
+type reasoningSpec struct {
+	SupportedEfforts []string `json:"supportedEfforts"`
+	DefaultEffort    string   `json:"defaultEffort"`
+	Effort           string   `json:"effort"`
+}
+
+// reasoningObject 把 reasoning 解析成统一结构；解析不出时返回零值。
+func reasoningObject(raw json.RawMessage) reasoningSpec {
+	if len(raw) == 0 {
+		return reasoningSpec{}
 	}
-	if err := json.Unmarshal(raw, &asObject); err != nil {
-		return nil
+	var spec reasoningSpec
+	if err := json.Unmarshal(raw, &spec); err != nil {
+		return reasoningSpec{}
 	}
-	return asObject.SupportedEfforts
+	if spec.DefaultEffort == "" {
+		spec.DefaultEffort = spec.Effort
+	}
+	return spec
 }

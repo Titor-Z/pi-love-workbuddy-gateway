@@ -10,6 +10,8 @@
     min_retention_days: 1,
     max_retention_days: 365,
   });
+  // 签到偏好。两个区块共用一个 PUT，所以保存时要把两边合起来提交。
+  let checkinSettings = $state({ checkin_enabled: false, checkin_time: "09:00", checkin_remind: false });
   let settingsPath = $state("");
   let settingsNotice = $state("");
   let settingsError = $state("");
@@ -22,6 +24,11 @@
       const payload = await api.settings();
       if (payload?.settings) {
         logSettings = payload.settings;
+        checkinSettings = {
+          checkin_enabled: payload.settings.checkin_enabled ?? false,
+          checkin_time: payload.settings.checkin_time ?? "09:00",
+          checkin_remind: payload.settings.checkin_remind ?? false,
+        };
         ranges = payload;
         settingsPath = payload.path;
       }
@@ -39,9 +46,31 @@
     settingsError = "";
     savingSettings = true;
     try {
-      const payload = await api.saveSettings(logSettings);
+      // 一次提交整份偏好：后端接口是整体替换（PUT），
+      // 只提交一部分会把它没提到的字段重置成默认值。
+      const payload = await api.saveSettings({ ...logSettings, ...checkinSettings });
       logSettings = payload.settings;
       settingsNotice = "已保存。日志页立即按新的每页条数显示；超出保留期的日志已经清掉。";
+    } catch (cause) {
+      settingsError = cause.message;
+    }
+    savingSettings = false;
+  }
+
+  async function saveCheckinSettings() {
+    settingsNotice = "";
+    settingsError = "";
+    savingSettings = true;
+    try {
+      const payload = await api.saveSettings({ ...logSettings, ...checkinSettings });
+      checkinSettings = {
+        checkin_enabled: payload.settings.checkin_enabled ?? false,
+        checkin_time: payload.settings.checkin_time ?? "09:00",
+        checkin_remind: payload.settings.checkin_remind ?? false,
+      };
+      settingsNotice = checkinSettings.checkin_enabled
+        ? `已保存。网关会每天 ${checkinSettings.checkin_time} 替你签到。`
+        : "已保存。自动签到已关闭。";
     } catch (cause) {
       settingsError = cause.message;
     }
@@ -123,6 +152,56 @@
     <p class="dim" style="margin:6px 0 0">
       允许范围：条数 {ranges.min_page_size}～{ranges.max_page_size}，
       保留 {ranges.min_retention_days}～{ranges.max_retention_days} 天。
+    </p>
+  </div>
+</section>
+
+<section class="section">
+  <header>
+    <h2>签到</h2>
+    <span class="hint">每天自动签到，网关在跑才会执行</span>
+  </header>
+
+  <div class="card">
+    <div class="bar" style="gap:32px;align-items:flex-end;flex-wrap:wrap">
+      <label class="field">
+        <span>自动签到</span>
+        <button
+          class="action"
+          aria-pressed={checkinSettings.checkin_enabled}
+          onclick={() => (checkinSettings.checkin_enabled = !checkinSettings.checkin_enabled)}
+        >
+          {checkinSettings.checkin_enabled ? "已开启" : "已关闭"}
+        </button>
+      </label>
+      <label class="field">
+        <span>每天签到时间</span>
+        <input type="time" bind:value={checkinSettings.checkin_time} />
+      </label>
+      <label class="field">
+        <span>首页提醒</span>
+        <button
+          class="action"
+          aria-pressed={checkinSettings.checkin_remind}
+          onclick={() => (checkinSettings.checkin_remind = !checkinSettings.checkin_remind)}
+        >
+          {checkinSettings.checkin_remind ? "已开启" : "已关闭"}
+        </button>
+      </label>
+      <button class="action primary" onclick={saveCheckinSettings} disabled={savingSettings}>
+        {savingSettings ? "保存中…" : "保存"}
+      </button>
+    </div>
+    <p class="dim" style="margin:12px 0 0">
+      开启后，网关每天在设定时刻替你签到一次。签到是幂等的，重复调用不会出错。
+      网关没在运行的时候不会签到。
+    </p>
+    <p class="dim" style="margin:6px 0 0">
+      首页提醒：今天还没签到时，在总览页的通知区说一声。不需要就不开。
+    </p>
+    <p class="dim" style="margin:6px 0 0">
+      签到断了就断了——<strong>本工具不提供补签</strong>。官方接口与客户端里
+      都没找到补签入口，所以我们不猜。连续天数从断的那天重新算。
     </p>
   </div>
 </section>

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -18,6 +19,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/appdir"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/catalog"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/config"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/credential"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/daemon"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/gateway"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/journal"
@@ -29,6 +31,7 @@ import (
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relay"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/relaytls"
 	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/settings"
+	"github.com/Titor-Z/pi-love-workbuddy-gateway/internal/workbuddy"
 )
 
 // shutdownTimeout 是收到中断信号后等待在途请求结束的时间。
@@ -39,6 +42,13 @@ const shutdownTimeout = 10 * time.Second
 // 它是唯一一个不启动服务的子命令：扩展内嵌在二进制里，
 // 用户拿这个命令把它放到 pi 的扩展目录（或任何目录）去。
 const commandPackage = "package"
+
+// commandCheckin 是「立刻签到一次」子命令。
+//
+// 它不启动服务，也不依赖网关在跑：自己取凭证、打一次签到、把结果
+// 打成一行 JSON。外部定时任务看板 exec 它就行——**进程级契约跨语言最稳**，
+// 看板用什么语言写的都无所谓，也不受本工具内部重构影响。
+const commandCheckin = "checkin"
 
 // version 是编译期注入的版本号（-ldflags "-X main.version=..."），
 // 直接 go build 时为 dev。
@@ -65,6 +75,9 @@ func run(args []string) error {
 	}
 	if len(args) > 0 && args[0] == commandPackage {
 		return runPackage(args[1:])
+	}
+	if len(args) > 0 && args[0] == commandCheckin {
+		return runCheckin(args[1:])
 	}
 	cfg, err := config.Parse(args)
 	if err != nil {
@@ -149,6 +162,106 @@ func packageUsage() string {
 		"",
 		"  扩展与网关是一体的：网关的模型目录多一个字段，插件就得跟着认，",
 		"  所以它内嵌在二进制里，不单独发版。重复执行就是更新。",
+		"",
+	}, "\n")
+}
+
+// runCheckin 处理 `checkin` 子命令：签到一次，结果打一行 JSON。
+//
+// 它不启动服务、不监听端口，也不需要网关在跑：自己取凭证打一次就行。
+// 这个子命令的主要消费者是外部的定时任务看板（exec 它、读那行 JSON），
+// 所以输出必须是**稳定的、可解析的**，不能混进日志行。
+//
+// 退出码约定：
+//
+//	0  今天确认签到了（包括「本来就已签过」）
+//	1  没签成（没凭证、网络失败、后端拒绝）
+//	2  参数错误
+func runCheckin(args []string) error {
+	flags := flag.NewFlagSet(commandCheckin, flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.Usage = func() {}
+	statusOnly := flags.Bool("status", false, "只查状态，不签到")
+	pretty := flags.Bool("pretty", false, "让 JSON 缩进输出（方便人读）")
+	if err := flags.Parse(args); err != nil {
+		fmt.Fprint(os.Stderr, checkinUsage())
+		os.Exit(2)
+	}
+	if flags.NArg() > 0 {
+		fmt.Fprintf(os.Stderr, "不认识的参数：%q\n%s", flags.Arg(0), checkinUsage())
+		os.Exit(2)
+	}
+
+	// 凭证与 at-rest 密钥的取法与网关模式完全一致，不另走一套。
+	authFile, err := credential.Locate("")
+	if err != nil {
+		writeCheckinError(err)
+		os.Exit(1)
+	}
+	cipher, err := gatewayCipher()
+	if err != nil {
+		writeCheckinError(err)
+		os.Exit(1)
+	}
+	cred := credential.NewManager(authFile, cipher, func(string, ...any) {}, "")
+	client := workbuddy.NewClient(cred, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if *statusOnly {
+		status, err := client.Status(ctx)
+		if err != nil {
+			writeCheckinError(err)
+			os.Exit(1)
+		}
+		writeCheckinJSON(map[string]any{"ok": true, "status": status}, *pretty)
+		return nil
+	}
+
+	store, err := workbuddy.OpenStore(appdir.CheckinPath())
+	if err != nil {
+		writeCheckinError(err)
+		os.Exit(1)
+	}
+	result := workbuddy.NewService(client, store).RunOnce(ctx)
+	if !result.Done {
+		writeCheckinJSON(map[string]any{"ok": false, "result": result}, *pretty)
+		os.Exit(1)
+	}
+	writeCheckinJSON(map[string]any{"ok": true, "result": result}, *pretty)
+	return nil
+}
+
+// writeCheckinJSON 把结果写成一行 JSON。它是这个子命令唯一的 stdout 输出。
+func writeCheckinJSON(payload map[string]any, pretty bool) {
+	encoder := json.NewEncoder(os.Stdout)
+	if pretty {
+		encoder.SetIndent("", "  ")
+	}
+	_ = encoder.Encode(payload)
+}
+
+// writeCheckinError 把错误写成一行 JSON 到 stdout，另一份给人看的写 stderr。
+//
+// 两处都写是有意的：看板读 stdout 的那个对象，用户在终端上看 stderr 的句子。
+func writeCheckinError(err error) {
+	writeCheckinJSON(map[string]any{"ok": false, "error": err.Error()}, false)
+	fmt.Fprintf(os.Stderr, "签到失败：%v\n", err)
+}
+
+// checkinUsage 是 checkin 子命令的用法。
+func checkinUsage() string {
+	return "\n" + strings.Join([]string{
+		"pi-love-workbuddy-gateway checkin —— 给这个账号签到一次",
+		"",
+		"  pi-love-workbuddy-gateway checkin [--status] [--pretty]",
+		"",
+		"  不加参数就是签到一次；结果打一行 JSON 到 stdout，退出码 0 表示签上了。",
+		"  --status  只查今天签没签，不真签到。",
+		"  --pretty  JSON 缩进，方便人读。",
+		"",
+		"  它不需要网关在跑，也不需要 WorkBuddy 桌面端——自己用本机凭证打一次接口。",
+		"  外部定时任务直接 exec 这个命令即可。",
 		"",
 	}, "\n")
 }
@@ -248,6 +361,7 @@ func runServe(cfg *config.Config, args []string) error {
 		Credential:      parts.credential,
 		Upstream:        parts.backend,
 		Billing:         billingSourceFor(parts),
+		Checkin:         optional.Cast[panel.CheckinSource](parts.checkin),
 		Overrides:       overrides,
 		OverridesSyncer: optional.Cast[panel.OverridesSyncer](parts.overridesSyncer),
 		Journal:         events,
@@ -338,6 +452,12 @@ func runServe(cfg *config.Config, args []string) error {
 	// 日志按保留天数清理：启动时先跑一次（用户改了保留期就重启的话，
 	// 旧日志应该马上消失），之后每 6 小时检查一次。
 	go runJournalPrune(ctx, events, preferences, logger)
+
+	// 自动签到：只在网关模式有它（签到需要账号凭证）。
+	// 关着的时候它不做事，但仍会定期回来看开关有没有被打开。
+	if parts.checkin != nil {
+		go runCheckinScheduler(ctx, parts.checkin, preferences, logger)
+	}
 
 	events.Append(journal.Record{Kind: journal.KindStart, Version: version,
 		Message: fmt.Sprintf("启动 %s，监听 %s", version, cfg.ListenAddr)})

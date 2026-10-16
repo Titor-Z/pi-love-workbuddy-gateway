@@ -36,6 +36,10 @@ func Usage() string {
 		"      把随二进制一起交付的 pi 扩展导出去（默认写进本机 pi 的扩展目录）。\n" +
 		"      每次升级网关后重跑一次，插件就跟着更新。\n" +
 		"\n" +
+		"  pi-love-workbuddy-gateway checkin [--status]\n" +
+		"      给这个账号签到一次，结果打一行 JSON。不需要网关在跑，\n" +
+		"      外部定时任务直接 exec 它就行。\n" +
+		"\n" +
 		"参数：\n" +
 		"  -addr   网关模式：对外服务地址，默认 0.0.0.0:" + fmt.Sprint(defaultRelayPort) + "\n" +
 		"          客户端模式：要连的网关地址\n" +

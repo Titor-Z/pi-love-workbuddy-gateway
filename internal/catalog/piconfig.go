@@ -44,6 +44,9 @@ type piModel struct {
 // WritePiConfig 输出一份可直接重定向到 ~/.pi/agent/models.json 的配置。
 func WritePiConfig(out io.Writer, entries []Entry, baseURL, apiKey string) error {
 	models := make([]piModel, 0, len(entries))
+	// ThinkingLevelMap 必须是**非空**的：pi 对 `reasoning:true` 但无映射的模型
+	// 会把 off 当成有效档位，进而发出一个会被后端拒的请求。理由详见
+	// catalog.ThinkingLevelMap 的注释。
 	for _, entry := range entries {
 		models = append(models, piModel{
 			ID:               entry.Model.ID,
